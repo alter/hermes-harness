@@ -130,6 +130,15 @@ check "verify: is still pending"                        "$(cat "$T/10-a/01-first
 tp set "$T/10-a/02-second" status done >/dev/null
 [ -z "$(tp next)" ] && ok "next says nothing when the tree is closed" || bad "next says nothing when the tree is closed" "$(tp next)"
 
+mkdir -p "$T/30-c/01-multi"
+mk "$T/30-c/01-multi" "multi" "src/c.py" "true" "AGENT" "10-a/01-first, 20-b/01-human"
+printf 'phase: c\nrole: AGENT\ntype: feature\npriority: P0\nstatus: todo\nverify: pending\nmilestone: M1\ndepends: 10-a/01-first, 20-b/01-human\n' > "$T/30-c/01-multi/labels.txt"
+check "a comma-separated depends waits on the unmet one" "$(tp list)" 'depends 20-b/01-human is todo'
+tp set "$T/20-b/01-human" status done >/dev/null
+check "it becomes ready when every dependency is done" "$(tp list)" 'ready .*30-c/01-multi'
+printf 'phase: c\nrole: AGENT\ntype: feature\npriority: P0\nstatus: todo\nverify: pending\nmilestone: M1\ndepends: -\n' > "$T/30-c/01-multi/labels.txt"
+check "a dash means no dependency" "$(tp list)" 'ready .*30-c/01-multi'
+
 echo "== config"
 cfg=$(cat "$SRC/config.yaml")
 check "approvals are off"              "$cfg" 'mode: "off"'

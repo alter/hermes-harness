@@ -45,16 +45,18 @@ def task_dirs(root: pathlib.Path) -> list[pathlib.Path]:
     return sorted(p.parent for p in root.rglob("task.txt"))
 
 
+def depends_of(labels: dict[str, str]) -> list[str]:
+    return [d for d in re.split(r"[,\s]+", labels.get("depends", "").strip()) if d and d != "-"]
+
+
 def depends_met(root: pathlib.Path, labels: dict[str, str]) -> tuple[bool, str]:
-    dep = labels.get("depends", "").strip()
-    if not dep:
-        return True, ""
-    dep_dir = root / dep
-    if not dep_dir.is_dir():
-        return False, f"depends points nowhere: {dep}"
-    dep_status = read_labels(dep_dir).get("status", "")
-    if dep_status != "done":
-        return False, f"depends {dep} is {dep_status or 'unlabelled'}, not done"
+    for dep in depends_of(labels):
+        dep_dir = root / dep
+        if not dep_dir.is_dir():
+            return False, f"depends points nowhere: {dep}"
+        dep_status = read_labels(dep_dir).get("status", "")
+        if dep_status != "done":
+            return False, f"depends {dep} is {dep_status or 'unlabelled'}, not done"
     return True, ""
 
 
