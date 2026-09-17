@@ -120,8 +120,8 @@ check "list marks the ready one"                        "$(tp list)" 'ready .*01
 check "list explains why a task is not ready"           "$(tp list)" 'role is HUMAN'
 check "list explains an unmet dependency"               "$(tp list)" 'depends 10-a/01-first is todo'
 check "the prompt carries the task body"                "$(tp prompt "$T/10-a/01-first")" 'GOAL'
-check "the prompt states the tree is read-only"         "$(tp prompt "$T/10-a/01-first")" 'read-only to you except NOTES.md'
-check "the prompt forbids claiming completion"          "$(tp prompt "$T/10-a/01-first")" 'never touch status: or verify:'
+check "the prompt states the tree is not the agent's"   "$(tp prompt "$T/10-a/01-first")" 'not in your working directory and is not yours to write'
+check "the prompt forbids claiming completion"          "$(tp prompt "$T/10-a/01-first")" 'never write status: or verify:'
 tp set "$T/10-a/01-first" status done >/dev/null
 check "status can be written"                           "$(cat "$T/10-a/01-first/labels.txt")" 'status: done'
 check "a met dependency releases the next task"         "$(tp next)" '10-a/02-second$'
@@ -138,6 +138,27 @@ tp set "$T/20-b/01-human" status done >/dev/null
 check "it becomes ready when every dependency is done" "$(tp list)" 'ready .*30-c/01-multi'
 printf 'phase: c\nrole: AGENT\ntype: feature\npriority: P0\nstatus: todo\nverify: pending\nmilestone: M1\ndepends: -\n' > "$T/30-c/01-multi/labels.txt"
 check "a dash means no dependency" "$(tp list)" 'ready .*30-c/01-multi'
+
+sfx="$TMP/suffix"; mkdir -p "$sfx"
+printf 'TASK: t\nGOAL\n  g\nCONTEXT\n  -\nSCOPE\n  + a\n  \xe2\x88\x92 b\nOUTCOME\n  prose, no path at all\nVERIFY (architect / verifier)\n  1. a criterion a human judges\nROLE\n  AGENT\nDEPENDS\n  -\n' > "$sfx/task.txt"
+out=$(python3 - "$sfx/task.txt" "$H" <<'PY'
+import pathlib, sys
+sys.path.insert(0, sys.argv[2])
+import tasks
+body = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+print("OUTCOME=" + tasks.section(body, "OUTCOME"))
+print("VERIFY=" + tasks.section(body, "VERIFY").splitlines()[0].strip())
+print("ROLE=" + tasks.section(body, "ROLE"))
+PY
+)
+check "a suffixed VERIFY header is still the VERIFY section" "$out" 'VERIFY=1\. a criterion'
+check "OUTCOME stops at the suffixed header"                 "$out" 'OUTCOME=prose, no path at all'
+check "the section after it is still found"                  "$out" 'ROLE=AGENT'
+printf 'phase: c\nrole: AGENT\ntype: research\npriority: P0\nstatus: todo\nverify: pending\nmilestone: M1\n' > "$sfx/labels.txt"
+out=$(python3 "$H/tasks.py" --root "$TMP" prompt "$sfx" --notes /tmp/notes-here 2>&1)
+check "the prompt names the notes directory"        "$out" '/tmp/notes-here/NOTES.md'
+check "the prompt says VERIFY is judged by a human" "$out" 'criteria a human'
+check "the prompt forbids recreating the tree"      "$out" 'Do not recreate it'
 
 echo "== config"
 cfg=$(cat "$SRC/config.yaml")

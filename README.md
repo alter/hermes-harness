@@ -39,7 +39,7 @@ If that last line prints nothing, stop and fix the server. Everything downstream
 
 ```bash
 pip install pyyaml
-./selftest.sh          # 72 checks on this checkout, installs nothing
+./selftest.sh          # 78 checks on this checkout, installs nothing
 ./install.sh           # merges into ~/.hermes/config.yaml, copies the harness to ~/.hermes/harness
 ./selftest.sh ~/.hermes
 ```
@@ -74,18 +74,23 @@ git tree from the root to the working directory. One contract, in the file the p
 One loop, one task at a time:
 
 1. `tasks.py next` picks the highest-priority task whose `status:` is open, whose `role:` is not `HUMAN`, and
-   whose `depends:` is `done`.
-2. The loop sets `status: in_progress` and hands Hermes the task body with the rules for the run.
+   whose `depends:` are all `done`.
+2. The loop sets `status: in_progress`, makes a notes directory inside the working directory, and hands Hermes
+   the task body plus the rules for the run, including where to write `NOTES.md` and `BLOCKED.md`.
 3. `hermes chat -Q --format stream-json` runs it headless with approvals off. The transcript lands in
    `.hermes-harness/logs/<task>.ndjson`.
-4. The loop then judges by evidence, not by the model's report: does the `OUTCOME` artefact exist at its path,
-   and does the `VERIFY` command exit 0?
-5. Both true → `status: review`, a line in `NOTES.md`, and a commit of the code (never of `tasks/`).
-   Otherwise the task stays open with a note saying which of the two failed.
+4. Afterwards the loop moves the agent's notes into the task directory and records what changed: how many files
+   the agent touched, and — only when `VERIFY` contains a shell command in backticks — what that command
+   printed and exited with.
+5. Exit 0 with something changed or recorded → `status: review` and a commit of the code (never of `tasks/`).
+   Nothing changed and nothing written, or a non-zero exit → the task stays open with a note saying which.
 6. `BLOCKED.md` written by the agent, or `HH_MAX_ATTEMPTS` (3) attempts without progress → `status: blocked`.
 
-The loop never writes `status: done` and never touches `verify:`. `review` means "a machine thinks this is
-finished"; only the external reviewer turns that into `done` / `verify: passed`.
+**The loop does not decide whether the work is any good, and that is deliberate.** In a real tree `OUTCOME`
+describes what must become true and `VERIFY` lists criteria a human reviewer judges — neither is a path to stat
+or a command to run. A loop that guesses a path out of prose does not fail loudly; it silently throws away work
+that was done. So the loop records evidence and hands over. `review` means "the agent ran and left something
+behind"; only the reviewer turns that into `done` / `verify: passed`, and the loop never writes either.
 
 Knobs: `HH_MAX_TASKS` (0 = until nothing is ready), `HH_MAX_ATTEMPTS`, `HH_RUN_VERIFY=0` to skip the check,
 `HH_PROFILE`, `HH_TASK_ROOT`, and `HH_WORKDIR` — the directory the agent works in, when it should not be the

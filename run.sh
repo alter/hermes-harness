@@ -36,7 +36,7 @@ section() {
 import pathlib, re, sys
 body = pathlib.Path(sys.argv[1], "task.txt").read_text(encoding="utf-8")
 marks = [(m.group(1).rstrip(":"), m.start(), m.end())
-         for m in re.finditer(r"^(TASK:|GOAL|CONTEXT|SCOPE|OUTCOME|VERIFY|ROLE|DEPENDS)\s*$", body, re.M)]
+         for m in re.finditer(r"^(TASK:|GOAL|CONTEXT|SCOPE|OUTCOME|VERIFY|ROLE|DEPENDS)\b.*$", body, re.M)]
 for i, (name, _, end) in enumerate(marks):
     if name == sys.argv[2]:
         stop = marks[i + 1][1] if i + 1 < len(marks) else len(body)
@@ -45,13 +45,8 @@ for i, (name, _, end) in enumerate(marks):
 PY
 }
 
-outcome_exists() {
-  local task=$1 found=1
-  while read -r candidate; do
-    [ -n "$candidate" ] || continue
-    if [ -e "$WORKDIR/$candidate" ] || [ -e "$candidate" ]; then found=0; fi
-  done < <(section "$task" OUTCOME | grep -oE '[A-Za-z0-9_./-]+\.[A-Za-z0-9]{1,8}|[A-Za-z0-9_./-]+/' || true)
-  return $found
+verify_command() {
+  section "$1" VERIFY | grep -oE '`[^`]+`' | head -n 1 | tr -d '`' || true
 }
 
 note() {
@@ -78,23 +73,35 @@ while :; do
   tasks set "$task" status in_progress
   printf '%s' "$((attempts + 1))" > "$attempts_file"
 
+  notes_dir="$WORKDIR/.hermes-notes/$name"
+  rm -rf "$notes_dir" 2>/dev/null || true
+  mkdir -p "$notes_dir"
+
+  changed_count() { ( cd "$WORKDIR" && git status --porcelain -- . ':!.hermes-notes' 2>/dev/null | wc -l ) || echo 0; }
+  before=$(changed_count)
   set +e
-  tasks prompt "$task" | ( cd "$WORKDIR" && hermes ${PROFILE:+-p "$PROFILE"} chat \
+  tasks prompt "$task" --notes "$notes_dir" | ( cd "$WORKDIR" && hermes ${PROFILE:+-p "$PROFILE"} chat \
       -Q --format stream-json --query-file - --accept-hooks ) > "$LOGS/$name.ndjson" 2>"$LOGS/$name.err"
   rc=$?
   set -e
+  after=$(changed_count)
 
+  [ -s "$notes_dir/NOTES.md" ] && { printf '\n## %s (attempt %s)\n\n' "$(date -u +%Y-%m-%dT%H:%MZ)" \
+      "$((attempts + 1))" >> "$task/NOTES.md"; cat "$notes_dir/NOTES.md" >> "$task/NOTES.md"; }
+  [ -s "$notes_dir/BLOCKED.md" ] && cp "$notes_dir/BLOCKED.md" "$task/BLOCKED.md"
+
+  verify_cmd=$(verify_command "$task")
   verify_rc=0
-  verify_cmd=$(section "$task" VERIFY | grep -oE '`[^`]+`' | head -n 1 | tr -d '`' || true)
   if [ "$RUN_VERIFY" = "1" ] && [ -n "$verify_cmd" ]; then
     set +e
     ( cd "$WORKDIR" && eval "$verify_cmd" ) > "$LOGS/$name.verify" 2>&1
     verify_rc=$?
     set -e
+    echo "   VERIFY \`$verify_cmd\` exited $verify_rc"
   fi
 
-  if [ -f "$task/BLOCKED.md" ]; then
-    echo "   blocked by the agent"
+  if [ -s "$notes_dir/BLOCKED.md" ]; then
+    echo "   the agent says it is blocked"
     tasks set "$task" status blocked
     note "$task" "harness: agent wrote BLOCKED.md, exit $rc"
     continue
@@ -106,26 +113,21 @@ while :; do
     continue
   fi
 
-  if ! outcome_exists "$task"; then
-    echo "   no OUTCOME artefact -> stays open"
-    note "$task" "harness: run finished but the OUTCOME artefact is not in the repository"
+  if [ "$after" -le "$before" ] && [ ! -s "$notes_dir/NOTES.md" ]; then
+    echo "   nothing changed and nothing recorded -> stays open"
+    note "$task" "harness: run exited 0 but changed no file and wrote no notes; log $LOGS/$name.ndjson"
     continue
   fi
 
-  if [ "$verify_rc" -ne 0 ]; then
-    echo "   VERIFY failed ($verify_cmd) -> stays open"
-    note "$task" "harness: VERIFY \`$verify_cmd\` exited $verify_rc; output in $LOGS/$name.verify"
-    continue
-  fi
-
-  echo "   artefact present, check passed -> review"
-  note "$task" "harness: artefact present, \`${verify_cmd:-no check}\` passed; handed to review"
+  echo "   $((after - before)) file(s) changed, notes recorded -> review"
+  note "$task" "harness: $((after - before)) file(s) changed in the working directory$(
+      [ -n "$verify_cmd" ] && printf ', `%s` exited %s' "$verify_cmd" "$verify_rc"); handed to review"
   tasks set "$task" status review
   rm -f "$attempts_file"
   finished=$((finished + 1))
 
   if [ -e "$WORKDIR/.git" ]; then
-    ( cd "$WORKDIR" && git add -- . ':!tasks' >/dev/null 2>&1 || true
+    ( cd "$WORKDIR" && git add -- . ':!tasks' ':!.hermes-notes' >/dev/null 2>&1 || true
       git -c user.name="hermes-harness" -c user.email="hermes@localhost" \
           commit -q -m "$name: $(section "$task" GOAL | head -n 1)" >/dev/null 2>&1 || true )
   fi

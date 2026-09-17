@@ -9,7 +9,7 @@ import sys
 READY_STATUSES = {"todo", "in_progress"}
 AGENT_WRITABLE_LABELS = {"status"}
 PRIORITY_ORDER = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
-SECTION_RE = re.compile(r"^(TASK:|GOAL|CONTEXT|SCOPE|OUTCOME|VERIFY|ROLE|DEPENDS)\s*$", re.M)
+SECTION_RE = re.compile(r"^(TASK:|GOAL|CONTEXT|SCOPE|OUTCOME|VERIFY|ROLE|DEPENDS)\b.*$", re.M)
 
 
 def read_labels(task_dir: pathlib.Path) -> dict[str, str]:
@@ -95,11 +95,12 @@ def section(body: str, name: str) -> str:
     return ""
 
 
-def build_prompt(root: pathlib.Path, task_dir: pathlib.Path) -> str:
+def build_prompt(root: pathlib.Path, task_dir: pathlib.Path, notes: str = "") -> str:
     body = (task_dir / "task.txt").read_text(encoding="utf-8")
     labels = read_labels(task_dir)
     rel = task_dir.relative_to(root.parent) if root.parent in task_dir.parents else task_dir
-    notes = task_dir / "NOTES.md"
+    notes_file = task_dir / "NOTES.md"
+    notes_dir = notes or "<unset>"
     parts = [
         f"You are working on one task: {rel}",
         "",
@@ -107,22 +108,25 @@ def build_prompt(root: pathlib.Path, task_dir: pathlib.Path) -> str:
         "",
         body.strip(),
         "",
-        f"Labels: " + ", ".join(f"{k}={v}" for k, v in sorted(labels.items())),
+        "Labels: " + ", ".join(f"{k}={v}" for k, v in sorted(labels.items())),
         "",
         "Rules for this run:",
-        "- The whole tasks/ tree is read-only to you except NOTES.md and BLOCKED.md in this directory.",
-        "  A guard blocks every other write there; do not try to work around it.",
-        "- You do not decide that the task is done and you never touch status: or verify:.",
-        "  The harness reads the evidence and decides. Your job is the work and the record of it.",
-        "- Produce the artefact named under OUTCOME, at the path it names. Nothing counts without it.",
-        "- Run the command under VERIFY yourself and record what it printed. If it fails, say so plainly.",
-        "- Append what you did, what you decided and what you could not settle to NOTES.md in this directory.",
-        "- If you cannot proceed, write BLOCKED.md here saying what is missing and what you tried, and stop.",
+        "- OUTCOME describes what must become true in the repository. VERIFY lists the criteria a human"
+        "  reviewer will judge it by — they are not a command for you to run unless one is written as a"
+        "  shell command in backticks. Make OUTCOME true and leave evidence a reviewer can check.",
+        "- The task tree is not in your working directory and is not yours to write. Do not recreate it,"
+        "  under any name. Your code and artefacts go where the project already keeps that kind of file.",
+        "- You never decide the task is finished and you never write status: or verify:. A reviewer does"
+        "  that, from what you leave behind. Overstating what you did only makes the review fail.",
+        f"- Write your record to {notes_dir}/NOTES.md: what you did, what you measured, what you decided,"
+        "  and what you could not settle. The harness moves it into the task directory afterwards.",
+        f"- If you cannot proceed, write {notes_dir}/BLOCKED.md with what is missing and what you tried,"
+        "  then stop. Stopping honestly is a result; a workaround that hides the problem is not.",
         "",
-        "Finish by printing one line: DONE <what exists now> or BLOCKED <what is missing>.",
+        "Finish by printing one line: DONE <what is now true> or BLOCKED <what is missing>.",
     ]
-    if notes.exists():
-        tail = notes.read_text(encoding="utf-8").strip().splitlines()[-20:]
+    if notes_file.exists():
+        tail = notes_file.read_text(encoding="utf-8").strip().splitlines()[-20:]
         if tail:
             parts[5:5] = ["", "Earlier notes on this task (the tail of NOTES.md):", "", "\n".join(tail), ""]
     return "\n".join(parts)
@@ -150,7 +154,7 @@ def cmd_list(args: argparse.Namespace) -> int:
 
 def cmd_prompt(args: argparse.Namespace) -> int:
     root = pathlib.Path(args.root).resolve()
-    print(build_prompt(root, pathlib.Path(args.task).resolve()))
+    print(build_prompt(root, pathlib.Path(args.task).resolve(), args.notes))
     return 0
 
 
@@ -171,6 +175,7 @@ def main() -> int:
     sub.add_parser("list").set_defaults(func=cmd_list)
     p = sub.add_parser("prompt")
     p.add_argument("task")
+    p.add_argument("--notes", default="", help="where the agent should write NOTES.md and BLOCKED.md")
     p.set_defaults(func=cmd_prompt)
     p = sub.add_parser("set")
     p.add_argument("task")
