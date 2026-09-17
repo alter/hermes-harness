@@ -98,6 +98,15 @@ m=c.get('model')
 print((m or {}).get('default') if isinstance(m, dict) else m)" "$TARGET/config.yaml")
 echo "   model: $model"
 
+if [ -f "$TARGET/shell-hooks-allowlist.json" ] && grep -q "$HARNESS/hooks" "$TARGET/shell-hooks-allowlist.json" 2>/dev/null; then
+  echo "== hook consent"
+  echo "   the hook scripts were just replaced, so their approved fingerprints are stale."
+  echo "   \`hermes hooks doctor\` will warn until you refresh them:"
+  for h in "$HARNESS"/hooks/*.py; do echo "     hermes hooks revoke \"python3 $h\""; done
+  echo "     echo ok | hermes chat -Q --query-file - --accept-hooks"
+  echo "     hermes hooks doctor"
+fi
+
 cat <<EOF
 
 Done.
