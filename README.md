@@ -39,7 +39,7 @@ If that last line prints nothing, stop and fix the server. Everything downstream
 
 ```bash
 pip install pyyaml
-./selftest.sh          # 58 checks on this checkout, installs nothing
+./selftest.sh          # 69 checks on this checkout, installs nothing
 ./install.sh           # merges into ~/.hermes/config.yaml, copies the harness to ~/.hermes/harness
 ./selftest.sh ~/.hermes
 ```
@@ -88,7 +88,8 @@ The loop never writes `status: done` and never touches `verify:`. `review` means
 finished"; only the external reviewer turns that into `done` / `verify: passed`.
 
 Knobs: `HH_MAX_TASKS` (0 = until nothing is ready), `HH_MAX_ATTEMPTS`, `HH_RUN_VERIFY=0` to skip the check,
-`HH_PROFILE`, `HH_TASK_ROOT`.
+`HH_PROFILE`, `HH_TASK_ROOT`, and `HH_WORKDIR` — the directory the agent works in, when it should not be the
+one holding the task tree (see below).
 
 ## What stops the agent touching `verify:`
 
@@ -99,14 +100,37 @@ all. Malformed input blocks too, because `fail_closed` means a crashed guard is 
 `approvals.deny` globs block the same paths before `--yolo`, `/yolo` and `approvals.mode: off` are even consulted
 — that floor is the only rule in Hermes that survives yolo.
 
-**Honestly, about its limits.** `terminal` runs as your user; `approvals.deny` is a command-string policy, not a
-sandbox, and the guard reads the command text, not the syscalls. A determined program — an interpreter fed a
-path it builds at runtime — is not something either layer can see. Two layers make it hard, not impossible. If
-you need a guarantee rather than a strong obstacle, move the tree behind file-system permissions or a read-only
-bind mount; the hook stays useful either way.
+Through the shell the rule is blunt on purpose: **no terminal command may name a path in the tree or a file
+belonging to it** — not to write, not to read, not to `git add`. On top of that, an interpreter (`python`,
+`perl`, `node`, a nested `sh -c`) handed code that mentions the tree and writes is refused even when the path is
+assembled from pieces at run time. The selftest carries the bypasses it is known to stop, including the one a
+27B model found on the first try.
 
-The second half of the defence is that the agent has no reason to go there. The loop injects the task into the
-prompt, and status is derived from evidence, so writing to the tree buys nothing.
+**Where this stops being a guarantee, plainly.** A guard that reads command text cannot see what a program does.
+Two examples it will not catch: a path decoded from base64 inside the interpreter, and — trivially — a helper
+script written to `/tmp` (legal, outside the tree) and then run by a command that mentions nothing protected.
+`terminal` runs as your user; `approvals.deny` is a string policy, not a sandbox. Layers make it hard, not
+impossible, and an agent that wants through will get through.
+
+**The fix that is a guarantee: do not hand it the file.** Point the agent at a working directory that has no
+task tree in it, and there is nothing left to defend:
+
+```bash
+git -C /path/to/project worktree add --no-checkout /home/you/project-work agent/work
+cd /home/you/project-work
+git sparse-checkout init --no-cone
+git sparse-checkout set '/*' '!/tasks/'
+git checkout
+HH_WORKDIR=/home/you/project-work ~/.hermes/harness/run.sh /path/to/project
+```
+
+The loop keeps reading the tree from the real checkout, the agent never sees it, and the work lands on its own
+branch. `run.sh` says so on every start while the tree is still inside the agent's working directory. Stronger
+still, and orthogonal: run Hermes as another user, or in a container with the tree bind-mounted read-only.
+
+The quieter half of the defence is that the agent gains nothing by going there. The loop injects the task into
+the prompt and derives status from evidence, so a forged `status: done` changes nothing except the moment
+someone notices.
 
 ## What we use of Hermes, and what we left alone
 

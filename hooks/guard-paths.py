@@ -17,6 +17,18 @@ MUTATORS = {
     "sed", "awk", "perl", "python", "python3", "tee", "dd", "truncate", "install",
     "mv", "cp", "rm", "rmdir", "ln", "touch", "shred", "patch", "ed", "sponge",
 }
+INTERPRETERS = {
+    "python", "python3", "perl", "ruby", "node", "deno", "bun", "php", "lua",
+    "sh", "bash", "zsh", "dash", "ksh", "env", "xargs", "eval", "exec", "awk", "sed",
+}
+PROTECTED_NAMES = set(filter(None, os.environ.get(
+    "HH_PROTECTED_NAMES", "labels.txt,task.txt,VERIFY.md").split(",")))
+WRITE_WORDS = re.compile(
+    r"""open\s*\(|\bwrite\b|write_text|writelines|\bPath\s*\(|O_WRONLY|O_CREAT|"w"|'w'|"a"|'a'"""
+    r"""|\btruncate\b|\bdump\b|\brename\b|\breplace\b|>>?|\bprint\s*\(.*file\s*=""",
+    re.S,
+)
+ROOT_WORD = re.compile(r"(?<![\w.-])%s(?![\w-])" % re.escape(PROTECTED_ROOT))
 
 
 def block(reason: str) -> None:
@@ -61,17 +73,26 @@ def command_touches_protected(command: str, cwd: pathlib.Path) -> str:
         tokens = shlex.split(command)
     except ValueError:
         tokens = command.split()
-    words = {t for t in tokens if t and not t.startswith("-")}
-    mutator = bool(MUTATORS & {pathlib.Path(t).name for t in words}) or bool(REDIRECT.search(command))
+    names = {pathlib.Path(t).name for t in tokens if t and not t.startswith("-")}
+
+    for name in PROTECTED_NAMES:
+        if name in command:
+            return f"the command names {name}, which belongs to the task tree"
+
+    if re.search(r"(?<![\w/])%s/" % re.escape(PROTECTED_ROOT), command):
+        return f"the command names a path under {PROTECTED_ROOT}/"
+
     for token in tokens:
         if token.startswith("-"):
             continue
         if protected(token.strip("'\"<>"), cwd):
-            if mutator:
-                return f"the command would write inside {PROTECTED_ROOT}/ ({token})"
-            return f"the command reaches into {PROTECTED_ROOT}/ ({token}) through the shell"
-    if re.search(r"(?<![\w/])%s/" % re.escape(PROTECTED_ROOT), command) and mutator:
-        return f"the command writes somewhere under {PROTECTED_ROOT}/"
+            return f"the command reaches into {PROTECTED_ROOT}/ ({token})"
+
+    if (INTERPRETERS & names) and ROOT_WORD.search(command) and WRITE_WORDS.search(command):
+        return (
+            f"an interpreter is being handed code that mentions {PROTECTED_ROOT} and writes. "
+            f"Building the path at run time does not make it a different path"
+        )
     return ""
 
 

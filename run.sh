@@ -6,6 +6,9 @@ HARNESS=${HH_HOME:-$HOME/.hermes/harness}
 PROJECT=${1:-$(pwd)}
 PROJECT=$(cd "$PROJECT" && pwd)
 ROOT=${HH_TASK_ROOT:-$PROJECT/tasks}
+WORKDIR=${HH_WORKDIR:-$PROJECT}
+[ -d "$WORKDIR" ] || { echo "no such working directory: $WORKDIR" >&2; exit 1; }
+WORKDIR=$(cd "$WORKDIR" && pwd)
 PROFILE=${HH_PROFILE:-}
 MAX_TASKS=${HH_MAX_TASKS:-0}
 MAX_ATTEMPTS=${HH_MAX_ATTEMPTS:-3}
@@ -17,6 +20,13 @@ command -v hermes >/dev/null 2>&1 || { echo "hermes is not on PATH" >&2; exit 1;
 [ -d "$ROOT" ] || { echo "no task tree at $ROOT" >&2; exit 1; }
 [ -f "$HARNESS/tasks.py" ] || { echo "harness not installed at $HARNESS (run install.sh)" >&2; exit 1; }
 mkdir -p "$LOGS" "$STATE/attempts"
+
+case "$ROOT" in
+  "$WORKDIR"/*) echo "note: the task tree is inside the agent's working directory."
+                echo "      Only guard-paths.py stands between the agent and it, and a guard that reads"
+                echo "      command text cannot see a path an interpreter builds at run time."
+                echo "      HH_WORKDIR=<a worktree without tasks/> removes the file instead of guarding it." ;;
+esac
 
 tasks() { python3 "$HARNESS/tasks.py" --root "$ROOT" "$@"; }
 slug()  { printf '%s' "${1#$ROOT/}" | tr '/' '-'; }
@@ -39,7 +49,7 @@ outcome_exists() {
   local task=$1 found=1
   while read -r candidate; do
     [ -n "$candidate" ] || continue
-    if [ -e "$PROJECT/$candidate" ] || [ -e "$candidate" ]; then found=0; fi
+    if [ -e "$WORKDIR/$candidate" ] || [ -e "$candidate" ]; then found=0; fi
   done < <(section "$task" OUTCOME | grep -oE '[A-Za-z0-9_./-]+\.[A-Za-z0-9]{1,8}|[A-Za-z0-9_./-]+/' || true)
   return $found
 }
@@ -69,7 +79,7 @@ while :; do
   printf '%s' "$((attempts + 1))" > "$attempts_file"
 
   set +e
-  tasks prompt "$task" | ( cd "$PROJECT" && hermes ${PROFILE:+-p "$PROFILE"} chat \
+  tasks prompt "$task" | ( cd "$WORKDIR" && hermes ${PROFILE:+-p "$PROFILE"} chat \
       -Q --format stream-json --query-file - --accept-hooks ) > "$LOGS/$name.ndjson" 2>"$LOGS/$name.err"
   rc=$?
   set -e
@@ -78,7 +88,7 @@ while :; do
   verify_cmd=$(section "$task" VERIFY | grep -oE '`[^`]+`' | head -n 1 | tr -d '`' || true)
   if [ "$RUN_VERIFY" = "1" ] && [ -n "$verify_cmd" ]; then
     set +e
-    ( cd "$PROJECT" && eval "$verify_cmd" ) > "$LOGS/$name.verify" 2>&1
+    ( cd "$WORKDIR" && eval "$verify_cmd" ) > "$LOGS/$name.verify" 2>&1
     verify_rc=$?
     set -e
   fi
@@ -114,8 +124,8 @@ while :; do
   rm -f "$attempts_file"
   finished=$((finished + 1))
 
-  if [ -d "$PROJECT/.git" ]; then
-    ( cd "$PROJECT" && git add -- . ':!tasks' >/dev/null 2>&1 || true
+  if [ -e "$WORKDIR/.git" ]; then
+    ( cd "$WORKDIR" && git add -- . ':!tasks' >/dev/null 2>&1 || true
       git -c user.name="hermes-harness" -c user.email="hermes@localhost" \
           commit -q -m "$name: $(section "$task" GOAL | head -n 1)" >/dev/null 2>&1 || true )
   fi

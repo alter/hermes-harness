@@ -51,17 +51,42 @@ check "an absolute path into the tree is blocked" \
 check "traversal into the tree is blocked" \
   "$(hook guard-paths.py "$(p write_file '{"path":"sub/../tasks/10-x/01-y/labels.txt","content":"x"}')")" 'is not yours to write'
 check "sed -i through the shell is blocked" \
-  "$(hook guard-paths.py "$(p terminal '{"command":"sed -i s/todo/done/ tasks/10-x/01-y/labels.txt"}')")" 'would write inside'
+  "$(hook guard-paths.py "$(p terminal '{"command":"sed -i s/todo/done/ tasks/10-x/01-y/labels.txt"}')")" 'names labels.txt'
 check "a redirect into the tree is blocked" \
-  "$(hook guard-paths.py "$(p terminal '{"command":"echo done > tasks/10-x/01-y/labels.txt"}')")" 'would write inside'
+  "$(hook guard-paths.py "$(p terminal '{"command":"echo done > tasks/10-x/01-y/labels.txt"}')")" 'names labels.txt'
 check "python -c writing into the tree is blocked" \
-  "$(hook guard-paths.py "$(p terminal '{"command":"python3 -c open(\"tasks/10-x/01-y/labels.txt\",\"w\")"}')")" 'writes somewhere under'
+  "$(hook guard-paths.py "$(p terminal '{"command":"python3 -c open(\"tasks/10-x/01-y/labels.txt\",\"w\")"}')")" 'names labels.txt'
 check "reading the tree through the shell is blocked" \
-  "$(hook guard-paths.py "$(p terminal '{"command":"cat tasks/10-x/01-y/labels.txt"}')")" 'reaches into'
+  "$(hook guard-paths.py "$(p terminal '{"command":"cat tasks/10-x/01-y/labels.txt"}')")" 'names labels.txt'
 empty "an unrelated command is allowed" "$(hook guard-paths.py "$(p terminal '{"command":"pytest -q"}')")"
-empty "git add of NOTES.md is allowed" \
-  "$(hook guard-paths.py "$(p terminal '{"command":"git add tasks/10-x/01-y/NOTES.md"}')")"
+check "the shell may not touch the tree at all, even to git add" \
+  "$(hook guard-paths.py "$(p terminal '{"command":"git add tasks/10-x/01-y/NOTES.md"}')")" 'names a path under'
 check "malformed input fails closed" "$(hook guard-paths.py 'not json')" 'refusing rather than guessing'
+
+for probe in \
+  'python3 -c "import pathlib;pathlib.Path(\"tasks\",\"10-x\",\"labels.txt\").write_text(\"x\")"|a path built piece by piece' \
+  'python3 -c "import os;open(os.path.join(\"tasks\",\"labels.txt\"),\"w\")"|os.path.join' \
+  'perl -e "open(F,\">\",\"tasks/10-x/labels.txt\")"|perl' \
+  'node -e "require(\"fs\").writeFileSync(\"tasks/10-x/labels.txt\",\"x\")"|node' \
+  'bash -c "echo done > tasks/10-x/labels.txt"|a nested shell' \
+  'cd tasks/10-x/01-hello && echo x > labels.txt|cd then write' \
+  'python3 -c "open(\"labels.txt\",\"w\")"|the bare protected name'
+do
+  cmd=${probe%|*}; label=${probe##*|}
+  out=$(hook guard-paths.py "$(p terminal "{\"command\":\"$(printf '%s' "$cmd" | sed 's/\\/\\\\/g; s/"/\\"/g')\"}")")
+  if [ -n "$out" ]; then ok "bypass refused: $label"; else bad "bypass refused: $label" "allowed: $cmd"; fi
+done
+
+for probe in \
+  'pytest tests/test_tasks.py -q|a test file whose name contains tasks' \
+  'python3 scripts/build.py --out dist|a project script' \
+  'python3 -c "open(\"src/a.py\",\"w\").write(\"x\")"|writing outside the tree' \
+  'python3 -m celery -A app.tasks worker|a module path containing tasks'
+do
+  cmd=${probe%|*}; label=${probe##*|}
+  out=$(hook guard-paths.py "$(p terminal "{\"command\":\"$(printf '%s' "$cmd" | sed 's/\\/\\\\/g; s/"/\\"/g')\"}")")
+  empty "still allowed: $label" "$out"
+done
 [ "$(rc guard-paths.py "$(p write_file '{"path":"tasks/10-x/01-y/labels.txt","content":"x"}')")" = "2" ] \
   && ok "a block exits 2" || bad "a block exits 2" "wrong exit code"
 

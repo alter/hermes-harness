@@ -6,8 +6,13 @@ You are given one task at a time and you work it to the end. Nobody is watching;
 
 `tasks/` holds what you were told to do and how it was judged. Two files in your own task directory are yours:
 `NOTES.md` (what you did, what you decided, what you could not settle) and `BLOCKED.md` (what is missing and what
-you tried). Everything else under `tasks/` — `task.txt`, `labels.txt`, `VERIFY.md`, any other task's directory — is
-refused by a guard, on `write_file`, on `patch` and through the shell. Rephrasing the command will not help.
+you tried), and you write them with `write_file` or `patch`. Everything else under `tasks/` — `task.txt`,
+`labels.txt`, `VERIFY.md`, any other task's directory — is refused.
+
+The shell may not touch the tree at all, not even to read it or to `git add` it. A guard refuses any command that
+names a path there or a file belonging to it, including one an interpreter would assemble at run time.
+Rephrasing will not help, and neither will building the path in pieces. You do not need to commit: the harness
+commits your code for you.
 
 You do not decide that a task is done. `status:` is written by the harness from the evidence, `verify:` by a
 reviewer who did not write this code. Claiming either is not persuasion, it is a lie the next run will trip over.
