@@ -1,0 +1,87 @@
+# config.yaml
+model:
+  default: REPLACE_WITH_THE_ID_YOUR_SERVER_REPORTS
+  provider: custom
+  base_url: http://127.0.0.1:8080/v1
+  api_key: ""
+  context_length: 262144
+
+toolsets:
+  - coding
+
+agent:
+  max_turns: 0
+  max_verify_nudges: 8
+  coding_context: focus
+  tool_use_enforcement: true
+  execution_guidance: true
+  intent_ack_continuation: true
+  task_completion_guidance: true
+  stall_guards: true
+  local_stream_stale_timeout: 900
+  disabled_toolsets:
+    - memory
+    - cronjob
+    - browser
+    - image_gen
+    - video
+    - video_gen
+    - tts
+    - vision
+    - session_search
+    - connections
+    - computer_use
+    - x_search
+
+approvals:
+  mode: "off"
+  single_query_mode: approve
+  cron_mode: deny
+  unattended_mode: deny
+  denial_breaker_threshold: 0
+  deny:
+    - "*tasks/*labels.txt*"
+    - "*tasks/*task.txt*"
+    - "*tasks/*VERIFY.md*"
+    - "git push*"
+    - "git reset --hard*"
+    - "git clean*"
+    - "git stash*"
+    - "git checkout -- *"
+    - "git checkout .*"
+    - "*sudo *"
+    - "rm -rf /*"
+    - "rm -rf ~*"
+
+tools:
+  tool_search:
+    enabled: "off"
+
+memory:
+  memory_enabled: false
+  user_profile_enabled: false
+  background_review:
+    enabled: false
+
+curator:
+  enabled: false
+
+checkpoints:
+  enabled: true
+
+delegation:
+  max_spawn_depth: 1
+  orchestrator_enabled: false
+
+hooks_auto_accept: true
+
+hooks:
+  pre_tool_call:
+    - matcher: "write_file|patch|terminal"
+      command: "python3 ~/.hermes/harness/hooks/guard-paths.py"
+      timeout: 10
+      fail_closed: true
+    - matcher: "terminal"
+      command: "python3 ~/.hermes/harness/hooks/guard-read.py"
+      timeout: 10
+      fail_closed: false
