@@ -39,7 +39,7 @@ If that last line prints nothing, stop and fix the server. Everything downstream
 
 ```bash
 pip install pyyaml
-./selftest.sh          # 111 checks on this checkout, installs nothing
+./selftest.sh          # 122 checks on this checkout, installs nothing
 ./install.sh           # merges into ~/.hermes/config.yaml, copies the harness to ~/.hermes/harness
 ./selftest.sh ~/.hermes
 ```
@@ -142,11 +142,18 @@ not the model, writes the labels:
 | `failed` | `verify: failed`, `status: todo`, and `REVIEW.md` goes into the next run's prompt |
 | `blocked` | `status: blocked` — the work cannot be judged here, a human has to settle it |
 
+A review that verified nothing is written to `REVIEW.unusable.md` and leaves the last good `REVIEW.md` alone —
+a failed attempt must not cost you the verdict that did hold. `verdict.py` is the part that decides all of this,
+in its own file rather than inside the shell, because logic that can quietly throw away a good review is logic
+that has to be testable.
+
 **The reviewer cannot write.** It runs under `--permission-mode dontAsk` with the write tools removed: reads and
 read-only commands go through, a write is refused and lands in `permission_denials`. Its worst failure is a wrong
 verdict, never a wrong edit. A `passed` verdict with an empty `evidence` list is refused by the script, as is a
-run where the project's own check (`HH_TEST_COMMAND`) was among the commands refused — that review verified
-nothing, whatever it concluded. `HH_REVIEW_MAX_ROUNDS` (2) unusable reviews in a row block the task rather than
+run where the project's own check (`HH_TEST_COMMAND`) was refused and never ran — that review verified nothing,
+whatever it concluded. The whole command has to match: a refused `timeout 120 python3 tools/x.py` is not a
+refused `python3 -m pytest -q`, and matching on the first word alone threw away a review that had run the suite
+for nine minutes. `HH_REVIEW_MAX_ROUNDS` (2) unusable reviews in a row block the task rather than
 loop on it.
 
 `failed` is the interesting case: the task goes back to `todo` with its attempt counter and session cleared, and

@@ -215,6 +215,52 @@ check "the review never bypasses permissions"             "$(printf '%s' "$rvs" 
 check "one named task can be reviewed on its own"        "$rvs" 'HH_REVIEW_ONLY'
 check "a task outside review is refused by name"         "$rvs" 'not review'
 
+vd="$TMP/vd"; mkdir -p "$vd"
+env_file="$TMP/envelope.json"
+verdict_of() { python3 "$H/verdict.py" "$env_file" "$vd" "$1" "$2" 2>&1; }
+# The reviewer was refused a command that merely starts with python3, and ran the
+# project's check anyway. Matching the refusal by the first word called that a
+# review that verified nothing, and threw away a good one.
+cat > "$env_file" <<'JSON'
+{"is_error": false,
+ "permission_denials": [{"tool_name": "Bash", "tool_input": {"command": "timeout 120 python3 tools/verify/x.py > /tmp/v.txt"}}],
+ "structured_output": {"verdict": "failed", "summary": "the sentinel is a class, not a call",
+   "unmet": ["OUTCOME"],
+   "evidence": [{"claim": "the suite fails", "command": "python3 -m pytest -q", "output": "124 failed, 2317 passed"}],
+   "next_step": "make it an instance"}}
+JSON
+check "a refused command that is not the project's check keeps the review" \
+  "$(verdict_of 0 'python3 -m pytest -q')" '^failed 1 yes$'
+check "the refusal is still written down" "$(cat "$vd/REVIEW.md")" 'not allowed to run'
+check "the evidence survives into the file" "$(cat "$vd/REVIEW.md")" '124 failed'
+cat > "$env_file" <<'JSON'
+{"is_error": false,
+ "permission_denials": [{"tool_name": "Bash", "tool_input": {"command": "python3 -m pytest -q"}}],
+ "structured_output": {"verdict": "passed", "summary": "looks fine", "unmet": [],
+   "evidence": [{"claim": "read the code"}]}}
+JSON
+check "refusing the project's own check does ruin the review" \
+  "$(verdict_of 0 'python3 -m pytest -q')" '^passed 1 no$'
+check "an unusable review goes to its own file" "$(cat "$vd/REVIEW.unusable.md")" 'was refused'
+check "it does not overwrite the usable one" "$(cat "$vd/REVIEW.md")" 'the sentinel is a class'
+cat > "$env_file" <<'JSON'
+{"is_error": false, "permission_denials": [],
+ "structured_output": {"verdict": "passed", "summary": "trust me", "unmet": [], "evidence": []}}
+JSON
+check "a pass with no evidence is refused" "$(verdict_of 0 '')" '^passed 0 no$'
+cat > "$env_file" <<'JSON'
+{"is_error": false, "permission_denials": [], "result": "credit balance too low"}
+JSON
+check "a run that produced nothing is refused" "$(verdict_of 1 '')" '^none 0 no$'
+check "the reason names the exit code" "$(cat "$vd/REVIEW.unusable.md")" 'claude exited 1'
+cat > "$env_file" <<'JSON'
+{"is_error": false, "permission_denials": [],
+ "structured_output": {"verdict": "passed", "summary": "it holds", "unmet": [],
+   "evidence": [{"claim": "the suite passes", "command": "python3 -m pytest -q", "output": "all green"}]}}
+JSON
+check "a supported pass is usable" "$(verdict_of 0 'python3 -m pytest -q')" '^passed 0 yes$'
+empty "a usable review clears the unusable one" "$(cat "$vd/REVIEW.unusable.md" 2>/dev/null)"
+
 echo "== config"
 cfg=$(cat "$SRC/config.yaml")
 check "approvals are off"              "$cfg" 'mode: "off"'
