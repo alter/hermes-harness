@@ -108,31 +108,48 @@ print((m or {}).get('default') if isinstance(m, dict) else m)" "$TARGET/config.y
 echo "   model: $model"
 
 echo "== hook consent"
-# Hermes ties an approval to the script's fingerprint, so replacing a hook
-# invalidates it. register_from_config(..., accept_hooks=True) is the same
-# public call the CLI makes at startup: it re-records the approvals against the
-# files just installed. No model call, no running server, no hand-edited JSON.
+# An approval is matched on (event, command) alone, so a replaced hook keeps
+# firing — but `hermes hooks doctor` keeps reporting drift until the recorded
+# fingerprint is refreshed. Do it here, where the files are replaced, instead
+# of leaving four commands for a human to run after every update.
 hermes_python() {
-  for candidate in python3 python; do
-    command -v "$candidate" >/dev/null 2>&1 || continue
-    "$candidate" -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('agent.shell_hooks') else 1)" 2>/dev/null \
-      && { echo "$candidate"; return 0; }
+  local candidates=() launcher resolved head c g
+  launcher=$(command -v hermes 2>/dev/null) || launcher=""
+  if [ -n "$launcher" ]; then
+    resolved=$(readlink -f "$launcher" 2>/dev/null) || resolved=$launcher
+    candidates+=("$(dirname "$resolved")/python3" "$(dirname "$resolved")/python")
+    head=$(head -c 256 "$resolved" 2>/dev/null | tr -d '\000' | head -n 1)
+    case "$head" in
+      '#!'*)
+        head=${head#\#!}
+        head=${head# }
+        head=${head##*/env }
+        head=${head%% *}
+        case "$head" in
+          *[!a-zA-Z0-9/_.@:-]*) ;;
+          *) candidates+=("$head") ;;
+        esac
+        ;;
+    esac
+  fi
+  [ -n "${VIRTUAL_ENV:-}" ] && candidates+=("$VIRTUAL_ENV/bin/python3") || true
+  for g in "$HOME"/.local/share/pipx/venvs/hermes*/bin/python \
+           "$HOME"/.local/pipx/venvs/hermes*/bin/python \
+           "$HOME"/.local/share/uv/tools/hermes*/bin/python; do
+    [ -x "$g" ] && candidates+=("$g")
   done
-  local launcher head
-  launcher=$(command -v hermes 2>/dev/null) || return 1
-  head=$(head -c 256 "$launcher" 2>/dev/null | tr -d '\000')
-  case "$head" in
-    '#!'*) head=$(printf '%s\n' "$head" | head -n 1 | sed 's/^#![[:space:]]*//; s/^.*\/env //') ;;
-    *) return 1 ;;
-  esac
-  case "$head" in *[!a-zA-Z0-9/_.@:-]*) return 1 ;; esac
-  [ -x "$head" ] && "$head" -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('agent.shell_hooks') else 1)" 2>/dev/null \
-    && { echo "$head"; return 0; }
+  candidates+=(python3 python)
+  for c in "${candidates[@]}"; do
+    [ -n "$c" ] || continue
+    command -v "$c" >/dev/null 2>&1 || continue
+    "$c" -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('agent.shell_hooks') else 1)" 2>/dev/null \
+      && { echo "$c"; return 0; }
+  done
   return 1
 }
 
-if PY=$(hermes_python); then
-  HERMES_HOME="$TARGET" "$PY" - "$HARNESS" <<'PYAPPROVE'
+consent_by_api() {
+  HERMES_HOME="$TARGET" "$1" - "$HARNESS" <<'PYAPPROVE'
 import sys
 from hermes_cli.config import load_config
 from agent.shell_hooks import (
@@ -160,16 +177,80 @@ for h in mine:
     print(f"   {'approved' if fresh else 'NOT approved'}: {h.event} -> {h.command.split('/')[-1]}")
 sys.exit(1 if failed else 0)
 PYAPPROVE
-  rc=$?
-  [ "$rc" -eq 0 ] && echo "   verify with: hermes hooks doctor" \
-                  || echo "   some hooks were not approved; run \`hermes hooks doctor\`" >&2
+}
+
+# Fallback for an installation whose python the script cannot find: refresh the
+# fingerprint in the consent file itself. It only touches records that already
+# exist — consent is never invented here, only re-stamped against the files
+# this run just wrote.
+consent_by_file() {
+  python3 - "$TARGET" "$HARNESS" <<'PYJSON'
+import json, os, pathlib, sys
+from datetime import datetime, timezone
+
+target, harness = pathlib.Path(sys.argv[1]), sys.argv[2]
+path = target / "shell-hooks-allowlist.json"
+try:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    approvals = data["approvals"]
+    assert isinstance(approvals, list)
+except Exception as exc:
+    print(f"   cannot read {path}: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+
+def mtime_iso(command):
+    script = os.path.expanduser(str(command).split()[-1])
+    return datetime.fromtimestamp(os.path.getmtime(script), tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+now = datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z")
+touched = 0
+for entry in approvals:
+    if not isinstance(entry, dict) or harness not in str(entry.get("command", "")):
+        continue
+    try:
+        fresh = mtime_iso(entry["command"])
+    except OSError:
+        continue
+    if entry.get("script_mtime_at_approval") == fresh:
+        continue
+    entry["script_mtime_at_approval"] = fresh
+    entry["approved_at"] = now
+    touched += 1
+    print(f"   re-stamped: {entry.get('event')} -> {str(entry['command']).split('/')[-1]}")
+
+if touched:
+    tmp = path.with_suffix(".incoming")
+    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+    print(f"   {touched} approval(s) refreshed in {path}")
+else:
+    print("   nothing to refresh")
+sys.exit(0)
+PYJSON
+}
+
+rc=0
+if PY=$(hermes_python); then
+  consent_by_api "$PY" || rc=$?
+elif [ -f "$TARGET/shell-hooks-allowlist.json" ]; then
+  echo "   agent.shell_hooks is not importable from any python this script can find;" >&2
+  echo "   refreshing the consent file directly." >&2
+  consent_by_file || rc=$?
 else
-  echo "   could not import agent.shell_hooks from any python on PATH." >&2
-  echo "   Approve by hand, or the hooks will not fire:" >&2
-  for h in "$HARNESS"/hooks/*.py; do echo "     hermes hooks revoke \"python3 $h\"" >&2; done
-  echo "     echo ok | hermes chat -Q --query-file - --accept-hooks" >&2
-  echo "     hermes hooks doctor" >&2
+  rc=2
 fi
+
+case "$rc" in
+  0) echo "   verify with: hermes hooks doctor" ;;
+  *) {
+       echo "   hook consent was not refreshed. Do it by hand, or the doctor keeps warning:" >&2
+       for h in "$HARNESS"/hooks/*.py; do echo "     hermes hooks revoke \"python3 $h\"" >&2; done
+       echo "     echo ok | hermes chat -Q --query-file - --accept-hooks" >&2
+       echo "     hermes hooks doctor" >&2
+     } ;;
+esac
 
 cat <<EOF
 

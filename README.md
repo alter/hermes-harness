@@ -39,7 +39,7 @@ If that last line prints nothing, stop and fix the server. Everything downstream
 
 ```bash
 pip install pyyaml
-./selftest.sh          # 87 checks on this checkout, installs nothing
+./selftest.sh          # 90 checks on this checkout, installs nothing
 ./install.sh           # merges into ~/.hermes/config.yaml, copies the harness to ~/.hermes/harness
 ./selftest.sh ~/.hermes
 ```
@@ -48,6 +48,13 @@ pip install pyyaml
 profile you use by hand. The merge keeps your own keys and other people's hooks, prints every value it changes,
 and does not duplicate a hook on a second run. `uninstall.sh <backup>` puts it all back; the backup remembers
 which target it came from.
+
+An approval is matched on the pair (event, command), so a hook whose file was replaced keeps firing — but
+`hermes hooks doctor` keeps reporting drift until the recorded fingerprint is refreshed. The installer refreshes
+it, so an update does not leave you four commands to run. It re-records through `agent.shell_hooks` when it can
+find the python Hermes runs on, and otherwise re-stamps the records that already exist in
+`shell-hooks-allowlist.json`. It never invents consent: a hook you have not approved is still approved at the
+first run, by `hooks_auto_accept` and `--accept-hooks`. `./selftest.sh ~/.hermes` checks the result.
 
 Then set the model, which the installer deliberately leaves as a placeholder:
 

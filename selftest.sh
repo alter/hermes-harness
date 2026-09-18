@@ -193,6 +193,28 @@ check "the deny floor covers the tree" "$cfg" 'tasks/\*labels.txt'
 check "the deny floor covers git push" "$cfg" 'git push'
 check "hooks are auto-accepted"        "$cfg" 'hooks_auto_accept: true'
 
+allow="$TARGET/shell-hooks-allowlist.json"
+if [ -f "$allow" ]; then
+  echo "== hook consent"
+  for f in "$H"/hooks/*.py; do
+    out=$(python3 - "$allow" "$f" <<'PY'
+import json, pathlib, sys
+from datetime import datetime, timezone
+
+allow, script = sys.argv[1], pathlib.Path(sys.argv[2])
+fresh = datetime.fromtimestamp(script.stat().st_mtime, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+for e in (json.load(open(allow)).get("approvals") or []):
+    if isinstance(e, dict) and pathlib.Path(str(e.get("command", "")).split()[-1]).name == script.name:
+        print("fresh" if e.get("script_mtime_at_approval") == fresh else "stale")
+        break
+else:
+    print("missing")
+PY
+)
+    check "$(basename "$f") is approved against the file that is installed" "$out" '^fresh$'
+  done
+fi
+
 echo
 echo "passed $pass, failed $fail"
 [ "$fail" -eq 0 ]
