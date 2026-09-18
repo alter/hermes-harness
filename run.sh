@@ -55,14 +55,33 @@ note() {
 }
 
 finished=0
+started=0
 while :; do
+  if [ "$MAX_TASKS" != "0" ] && [ "$started" -ge "$MAX_TASKS" ]; then
+    echo "== $MAX_TASKS task(s) attempted, stopping as asked"
+    break
+  fi
   task=$(tasks next) || { echo "== nothing ready in $ROOT"; break; }
   name=$(slug "$task")
   attempts_file="$STATE/attempts/$name"
   attempts=$(cat "$attempts_file" 2>/dev/null || echo 0)
 
+  if [ "$(python3 - "$task" <<'PY'
+import pathlib, sys
+for line in pathlib.Path(sys.argv[1], "labels.txt").read_text(encoding="utf-8").splitlines():
+    if line.split(":", 1)[0].strip() == "status":
+        print(line.split(":", 1)[1].strip()); break
+PY
+)" = "todo" ] && [ "$attempts" -gt 0 ]; then
+    echo "== $name: status was reset to todo, so the attempt counter goes with it"
+    rm -f "$attempts_file"
+    attempts=0
+  fi
+
+  started=$((started + 1))
   if [ "$attempts" -ge "$MAX_ATTEMPTS" ]; then
     echo "== $name: $attempts attempts without progress -> blocked"
+    echo "   (clear $attempts_file to give it another run)"
     [ -f "$task/BLOCKED.md" ] || printf '# Blocked\n\nStopped after %s attempts with no artefact and no passing check.\nSee NOTES.md and %s.\n' \
       "$attempts" "$LOGS/$name.ndjson" > "$task/BLOCKED.md"
     tasks set "$task" status blocked
@@ -132,9 +151,8 @@ while :; do
           commit -q -m "$name: $(section "$task" GOAL | head -n 1)" >/dev/null 2>&1 || true )
   fi
 
-  [ "$MAX_TASKS" != "0" ] && [ "$finished" -ge "$MAX_TASKS" ] && { echo "== $MAX_TASKS tasks done"; break; }
 done
 
 echo
-echo "handed to review: $finished"
+echo "attempted: $started, handed to review: $finished"
 tasks list
