@@ -33,6 +33,7 @@ put() {
 }
 put "$SRC/tasks.py" "$HARNESS/tasks.py"
 put "$SRC/verdict.py" "$HARNESS/verdict.py"
+put "$SRC/pregate.py" "$HARNESS/pregate.py"
 put "$SRC/run.sh" "$HARNESS/run.sh"
 put "$SRC/review.sh" "$HARNESS/review.sh"
 for h in "$SRC"/hooks/*.py; do put "$h" "$HARNESS/hooks/$(basename "$h")"; done

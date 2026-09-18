@@ -39,7 +39,7 @@ If that last line prints nothing, stop and fix the server. Everything downstream
 
 ```bash
 pip install pyyaml
-./selftest.sh          # 124 checks on this checkout, installs nothing
+./selftest.sh          # 139 checks on this checkout, installs nothing
 ./install.sh           # merges into ~/.hermes/config.yaml, copies the harness to ~/.hermes/harness
 ./selftest.sh ~/.hermes
 ```
@@ -141,6 +141,29 @@ not the model, writes the labels:
 | `passed` | `verify: passed`, `status: done` |
 | `failed` | `verify: failed`, `status: todo`, and `REVIEW.md` goes into the next run's prompt |
 | `blocked` | `status: blocked` — the work cannot be judged here, a human has to settle it |
+
+### The cheap half first
+
+Before a reader is called, `review.sh` runs the project's own check (`HH_TEST_COMMAND`) against the working
+tree, and compares what fails with what already failed at the change's baseline — `HEAD`, or the parent of the
+commit the writing loop made. A failure that was there before is not this change's fault; a failure that was
+not is, and no reader is needed to say so. The task goes back to `todo` with `CHECK.md` naming exactly which
+checks went from passing to failing, and that note is what the next run reads first.
+
+The baseline is measured in a throwaway working copy (`git worktree add --detach`) so nothing in yours is
+touched, and remembered per commit and per command — the slow run happens once, not once per task. When there
+is no baseline to be had, or the baseline itself fails without naming anything (a collection error, a missing
+dependency, the wrong directory), **the gate decides nothing and the change goes to the reader anyway**. It is
+an optimization, not a guard: its only power is to send work back, never to let it through.
+
+What survives the gate reaches the reader with the check's output already in the prompt, measured against that
+exact tree — so a review that used to spend nine minutes re-running the suite now spends none. In the test
+project, that took one review from three turns of running things to three turns of reading.
+
+`HH_PREGATE=0` turns it off. `HH_PREGATE_PATTERN` is the regular expression that turns the check's output into
+failure names; the default reads pytest's `FAILED <nodeid>` / `ERROR <nodeid>` lines, and the first capturing
+group is the name. `HH_MAX_RETURNS` (3) is how many times a task may be sent back — by the gate or by a reader —
+before it is blocked instead, so a worker that cannot fix a thing does not bounce against it forever.
 
 A review that verified nothing is written to `REVIEW.unusable.md` and leaves the last good `REVIEW.md` alone —
 a failed attempt must not cost you the verdict that did hold. `verdict.py` is the part that decides all of this,

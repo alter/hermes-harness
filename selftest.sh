@@ -217,6 +217,40 @@ check "a task outside review is refused by name"         "$rvs" 'not review'
 check "the previous envelope is kept, not overwritten"   "$rvs" 'review.previous.json'
 check "the price of a review is printed"                 "$rvs" 'total_cost_usd'
 
+echo "== pregate"
+pg="$TMP/pg"; mkdir -p "$pg"
+printf 'FAILED tests/a.py::test_one - boom\nFAILED tests/b.py::test_two - boom\n2 failed\n' > "$pg/base"
+printf 'FAILED tests/a.py::test_one - boom\nFAILED tests/b.py::test_two - boom\n2 failed\n' > "$pg/same"
+printf 'FAILED tests/a.py::test_one - boom\nFAILED tests/c.py::test_new - boom\n2 failed\n' > "$pg/worse"
+printf 'FAILED tests/a.py::test_one - boom\n1 failed\n' > "$pg/better"
+printf 'ImportError while loading conftest\n' > "$pg/broken"
+printf 'all good\n' > "$pg/green"
+pg_rc() { python3 "$H/pregate.py" "$1" "$2" --baseline-rc "$3" --work-rc "$4" >/dev/null 2>&1; echo $?; }
+check "a failure that was already there is not the change's fault" "$(pg_rc "$pg/base" "$pg/same" 1 1)" '^0$'
+check "a new failure sends the work back"                          "$(pg_rc "$pg/base" "$pg/worse" 1 1)" '^1$'
+check "it names the failure that is new" \
+  "$(python3 "$H/pregate.py" "$pg/base" "$pg/worse" --baseline-rc 1 --work-rc 1)" 'tests/c.py::test_new'
+check "fixing one of them is not a reason to send it back"         "$(pg_rc "$pg/base" "$pg/better" 1 1)" '^0$'
+check "a baseline that names nothing decides nothing"              "$(pg_rc "$pg/broken" "$pg/worse" 2 1)" '^2$'
+check "red where it was green sends it back even unparsed"         "$(pg_rc "$pg/green" "$pg/broken" 0 1)" '^1$'
+check "green stays green"                                          "$(pg_rc "$pg/green" "$pg/green" 0 0)" '^0$'
+printf 'boom in module alpha\n' > "$pg/other"
+check "the pattern is the caller's to choose" \
+  "$(python3 "$H/pregate.py" "$pg/green" "$pg/other" --baseline-rc 0 --work-rc 1 --pattern 'boom in module (\S+)')" '^alpha$'
+printf 'FAILED tests/x.py::t - e\n' > "$TMP/co"
+out=$(python3 "$H/tasks.py" --root "$TMP" review-prompt "$rv" --diff "$TMP/d.diff" \
+        --test-command "pytest -q" --check-output "$TMP/co" 2>&1)
+check "the reviewer is told the check has already run" "$out" 'already been run'
+check "and is shown what it printed"                   "$out" 'tests/x.py::t'
+printf '# The check\n\n- `tests/x.py::t`\n' > "$rv/CHECK.md"
+check "the gate's note reaches the next run" \
+  "$(python3 "$H/tasks.py" --root "$TMP" prompt "$rv" --notes /tmp/n 2>&1)" 'went backwards'
+rm -f "$rv/CHECK.md"
+check "the gate measures a baseline in its own working copy" "$rvs" 'git worktree add --detach'
+check "the baseline is remembered per commit and command"   "$rvs" 'cache.rc'
+check "being sent back too often blocks the task"           "$rvs" 'MAX_RETURNS'
+check "a gate return clears the older verdict"            "$rvs" 'verify pending --as reviewer'
+
 vd="$TMP/vd"; mkdir -p "$vd"
 env_file="$TMP/envelope.json"
 verdict_of() { python3 "$H/verdict.py" "$env_file" "$vd" "$1" "$2" 2>&1; }

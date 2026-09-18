@@ -63,6 +63,8 @@ target = task_dir / ("REVIEW.unusable.md" if why else "REVIEW.md")
 target.write_text("\n".join(lines) + "\n", encoding="utf-8")
 if not why:
     (task_dir / "REVIEW.unusable.md").unlink(missing_ok=True)
+    # A reader has now looked at the change, so the gate's note is the older word.
+    (task_dir / "CHECK.md").unlink(missing_ok=True)
 
 with (task_dir / "NOTES.md").open("a", encoding="utf-8") as fh:
     if why:

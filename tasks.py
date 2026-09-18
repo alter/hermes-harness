@@ -143,6 +143,11 @@ def build_prompt(root: pathlib.Path, task_dir: pathlib.Path, notes: str = "") ->
         "",
         "Finish by printing one line: DONE <what is now true> or BLOCKED <what is missing>.",
     ]
+    check_file = task_dir / "CHECK.md"
+    if check_file.exists():
+        parts[5:5] = ["", "The project's own check was run against your work and it went backwards.",
+                      "This is why the task is open again — answer it first:", "",
+                      check_file.read_text(encoding="utf-8").strip()[:8000], ""]
     review_file = task_dir / "REVIEW.md"
     if review_file.exists():
         verdict = review_file.read_text(encoding="utf-8").strip()
@@ -157,7 +162,7 @@ def build_prompt(root: pathlib.Path, task_dir: pathlib.Path, notes: str = "") ->
 
 
 def build_review_prompt(root: pathlib.Path, task_dir: pathlib.Path, diff: str, test_cmd: str,
-                        workdir: str = "") -> str:
+                        workdir: str = "", check_output: str = "") -> str:
     body = (task_dir / "task.txt").read_text(encoding="utf-8")
     labels = read_labels(task_dir)
     rel = task_dir.relative_to(root.parent) if root.parent in task_dir.parents else task_dir
@@ -202,7 +207,14 @@ def build_review_prompt(root: pathlib.Path, task_dir: pathlib.Path, diff: str, t
         "does not do what OUTCOME asked for is a failure. Tests written alongside the change are part of what",
         "you are judging, not proof: read them and say whether they would catch the thing going wrong.",
     ]
-    if test_cmd:
+    if test_cmd and check_output:
+        tail = check_output.strip()[-20000:]
+        parts += ["", f"The project's own check, `{test_cmd}`, has already been run against exactly this",
+                  "working tree, and nothing has changed since. Its output ends like this:", "",
+                  "```", tail, "```", "",
+                  "Treat that as measured, not claimed. Run it again only if you need something it does not",
+                  "show — a narrower selection, or a second look after you have read the code."]
+    elif test_cmd:
         parts += ["", f"The project's own check is `{test_cmd}`. Run it. Its result is evidence; your"
                       " impression is not."]
     parts += [
@@ -260,9 +272,9 @@ def cmd_queue(args: argparse.Namespace) -> int:
 
 def cmd_review_prompt(args: argparse.Namespace) -> int:
     root = pathlib.Path(args.root).resolve()
-    diff = pathlib.Path(args.diff).read_text(encoding="utf-8", errors="replace") if args.diff else ""
-    print(build_review_prompt(root, pathlib.Path(args.task).resolve(), diff, args.test_command,
-                              args.workdir))
+    read = lambda path: pathlib.Path(path).read_text(encoding="utf-8", errors="replace") if path else ""
+    print(build_review_prompt(root, pathlib.Path(args.task).resolve(), read(args.diff), args.test_command,
+                              args.workdir, read(args.check_output)))
     return 0
 
 
@@ -293,6 +305,7 @@ def main() -> int:
     p.add_argument("--diff", default="", help="a file holding the change under review")
     p.add_argument("--test-command", default="", help="the project's own check, if it has one")
     p.add_argument("--workdir", default="", help="where the reviewer will be standing")
+    p.add_argument("--check-output", default="", help="what the project's own check printed, if it has run")
     p.set_defaults(func=cmd_review_prompt)
     p = sub.add_parser("set")
     p.add_argument("task")

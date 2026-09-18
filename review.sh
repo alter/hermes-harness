@@ -16,6 +16,9 @@ EFFORT=${HH_REVIEW_EFFORT:-high}
 BUDGET=${HH_REVIEW_BUDGET:-5}
 TEST_CMD=${HH_TEST_COMMAND:-}
 ONLY=${HH_REVIEW_ONLY:-}
+PREGATE=${HH_PREGATE:-1}
+PATTERN=${HH_PREGATE_PATTERN:-}
+MAX_RETURNS=${HH_MAX_RETURNS:-3}
 DIFF_LIMIT=${HH_REVIEW_DIFF_CHARS:-200000}
 STATE="$PROJECT/.hermes-harness"
 LOGS="$STATE/logs"
@@ -23,7 +26,7 @@ LOGS="$STATE/logs"
 command -v claude >/dev/null 2>&1 || { echo "claude is not on PATH" >&2; exit 1; }
 [ -d "$ROOT" ] || { echo "no task tree at $ROOT" >&2; exit 1; }
 [ -f "$HARNESS/tasks.py" ] || { echo "harness not installed at $HARNESS (run install.sh)" >&2; exit 1; }
-mkdir -p "$LOGS" "$STATE/review-rounds" "$STATE/review"
+mkdir -p "$LOGS" "$STATE/review-rounds" "$STATE/review" "$STATE/returns" "$STATE/baseline"
 printf '*\n' > "$STATE/.gitignore"
 
 help=$(claude --help 2>/dev/null || true)
@@ -83,6 +86,54 @@ capture_diff() {
   fi
 }
 
+# The cheap half of judging. A change that breaks a test which was passing
+# before does not need a reader to say so, and a reader is the expensive part.
+# The gate only ever sends work back; it never lets anything through to done.
+baseline_ref() {
+  local ref
+  ref=$(cat "$STATE/review/$1" 2>/dev/null || echo worktree)
+  case "$ref" in
+    commit\ *) printf '%s^' "${ref#commit }" ;;
+    *) printf 'HEAD' ;;
+  esac
+}
+
+run_check() {
+  local dir=$1 out=$2 rc=0
+  ( cd "$dir" && eval "$TEST_CMD" ) > "$out" 2>&1 || rc=$?
+  return "$rc"
+}
+
+# Empty means there is no baseline to compare against, which is not the same as
+# a baseline of zero failures.
+BASELINE_RC=""
+baseline_check() {
+  local ref=$1 out=$2 sha key cache tree rc=0
+  BASELINE_RC=""
+  sha=$( cd "$WORKDIR" && git rev-parse "$ref" 2>/dev/null ) || return 0
+  key=$(printf '%s %s' "$sha" "$TEST_CMD" | sha1sum | cut -d' ' -f1)
+  cache="$STATE/baseline/$key"
+  if [ -f "$cache.out" ] && [ -f "$cache.rc" ]; then
+    cp "$cache.out" "$out"
+    BASELINE_RC=$(cat "$cache.rc")
+    echo "   baseline at ${sha:0:8}: remembered, exit $BASELINE_RC"
+    return 0
+  fi
+  tree=$(mktemp -d "${TMPDIR:-/tmp}/hh-baseline.XXXXXX")
+  if ! ( cd "$WORKDIR" && git worktree add --detach "$tree" "$sha" ) >/dev/null 2>&1; then
+    rmdir "$tree" 2>/dev/null || true
+    echo "   baseline at ${sha:0:8}: a working copy could not be made"
+    return 0
+  fi
+  echo "   baseline at ${sha:0:8}: measuring it once, this is the slow part"
+  run_check "$tree" "$out" || rc=$?
+  ( cd "$WORKDIR" && git worktree remove --force "$tree" ) >/dev/null 2>&1 || true
+  cp "$out" "$cache.out"
+  printf '%s' "$rc" > "$cache.rc"
+  BASELINE_RC=$rc
+  return 0
+}
+
 SCHEMA='{"type":"object","additionalProperties":false,"properties":{
   "verdict":{"type":"string","enum":["passed","failed","blocked"]},
   "summary":{"type":"string"},
@@ -134,6 +185,63 @@ while :; do
   capture_diff "$name" "$diff_file"
   echo "   change under review: $(head -n 1 "$diff_file" | sed 's/^# //'), $(wc -c < "$diff_file") characters"
 
+  gate=go
+  new_failures=""
+  check_out="$LOGS/$name.check.out"
+  if [ "$PREGATE" = "1" ] && [ -n "$TEST_CMD" ]; then
+    ref=$(baseline_ref "$name")
+    work_rc=0
+    echo "   the project's check first: $TEST_CMD"
+    run_check "$WORKDIR" "$check_out" || work_rc=$?
+    echo "   it exited $work_rc here"
+    baseline_check "$ref" "$LOGS/$name.baseline.out"
+    if [ -z "$BASELINE_RC" ]; then
+      echo "   no baseline to compare with, so the gate decides nothing"
+    else
+      set +e
+      new_failures=$(python3 "$HARNESS/pregate.py" "$LOGS/$name.baseline.out" "$check_out" \
+        --baseline-rc "$BASELINE_RC" --work-rc "$work_rc" ${PATTERN:+--pattern "$PATTERN"})
+      prc=$?
+      set -e
+      case "$prc" in
+        1) gate=back ;;
+        2) echo "   the baseline names nothing, so the gate decides nothing" ;;
+        *) echo "   the check is no worse than at $ref -> worth reading" ;;
+      esac
+    fi
+  fi
+
+  if [ "$gate" = "back" ]; then
+    count=$(printf '%s\n' "$new_failures" | grep -c . || true)
+    echo "   the change breaks $count check(s) that passed at $ref -> back without a reader"
+    {
+      printf '# The project'"'"'s own check, before anyone read the code\n\n'
+      printf '`%s`, run in %s.\n\n' "$TEST_CMD" "$WORKDIR"
+      if [ "$count" -gt 0 ]; then
+        printf 'It fails in %s place(s) that were passing at %s:\n\n' "$count" "$ref"
+        printf '%s\n' "$new_failures" | sed 's/^/- `/; s/$/`/'
+      else
+        printf 'It fails here and passed at %s.\n' "$ref"
+      fi
+      printf '\nThe tail of its output:\n\n```\n'
+      tail -n 40 "$check_out"
+      printf '```\n\nNobody has read the change yet. Make the check pass, and it goes to a reviewer.\n'
+    } > "$task/CHECK.md"
+    # Whatever a reader concluded last time was about work that has since changed.
+    tasks set "$task" verify pending --as reviewer
+    returns=$(( $(cat "$STATE/returns/$name" 2>/dev/null || echo 0) + 1 ))
+    printf '%s' "$returns" > "$STATE/returns/$name"
+    if [ "$returns" -ge "$MAX_RETURNS" ]; then
+      echo "   sent back $returns times -> blocked, a human has to look"
+      tasks set "$task" status blocked --as reviewer
+    else
+      tasks set "$task" status todo --as reviewer
+      rm -f "$STATE/attempts/$name" "$STATE/sessions/$name"
+    fi
+    started=$started
+    continue
+  fi
+
   allowed=(Read Grep Glob
            "Bash(git diff:*)" "Bash(git show:*)" "Bash(git log:*)" "Bash(git status:*)"
            "Bash(git ls-files:*)" "Bash(rg:*)" "Bash(sed -n:*)" "Bash(wc:*)" "Bash(ls:*)")
@@ -144,7 +252,10 @@ while :; do
   [ -f "$LOGS/$name.review.json" ] && mv -f "$LOGS/$name.review.json" "$LOGS/$name.review.previous.json" || true
 
   set +e
+  check_arg=()
+  [ -s "$check_out" ] && check_arg=(--check-output "$check_out") || true
   tasks review-prompt "$task" --diff "$diff_file" --test-command "$TEST_CMD" --workdir "$WORKDIR" \
+    "${check_arg[@]}" \
     | ( cd "$WORKDIR" && claude -p \
         --model "$MODEL" "${effort_flag[@]}" \
         --permission-mode dontAsk "${prompts_flag[@]}" \
@@ -196,13 +307,21 @@ except Exception as exc:
     passed)
       tasks set "$task" verify passed --as reviewer
       tasks set "$task" status done --as reviewer
+      rm -f "$STATE/returns/$name"
       echo "   -> done"
       judged=$((judged + 1)) ;;
     failed)
+      returns=$(( $(cat "$STATE/returns/$name" 2>/dev/null || echo 0) + 1 ))
+      printf '%s' "$returns" > "$STATE/returns/$name"
       tasks set "$task" verify failed --as reviewer
-      tasks set "$task" status todo --as reviewer
-      rm -f "$STATE/attempts/$name" "$STATE/sessions/$name"
-      echo "   -> back to todo, with REVIEW.md for the next run to read"
+      if [ "$returns" -ge "$MAX_RETURNS" ]; then
+        tasks set "$task" status blocked --as reviewer
+        echo "   -> sent back $returns times already; blocked, a human has to look"
+      else
+        tasks set "$task" status todo --as reviewer
+        rm -f "$STATE/attempts/$name" "$STATE/sessions/$name"
+        echo "   -> back to todo, with REVIEW.md for the next run to read"
+      fi
       judged=$((judged + 1)) ;;
     blocked)
       tasks set "$task" status blocked --as reviewer
