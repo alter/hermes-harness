@@ -90,6 +90,24 @@ done
 [ "$(rc guard-paths.py "$(p write_file '{"path":"tasks/10-x/01-y/labels.txt","content":"x"}')")" = "2" ] \
   && ok "a block exits 2" || bad "a block exits 2" "wrong exit code"
 
+echo "== guard-notes"
+nt="$TMP/notes"; mkdir -p "$nt"
+gn() { printf '%s' "$2" | HH_NOTES_FILE="$nt/NOTES.md" python3 "$H/hooks/guard-notes.py" 2>/dev/null; }
+check "stopping with no record is refused" \
+  "$(gn x '{"extra":{"attempt":1,"changed_paths":["src/a.py"]}}')" 'about to stop without a record'
+check "the refusal names the files that changed" \
+  "$(gn x '{"extra":{"changed_paths":["src/a.py"]}}')" 'src/a\.py'
+echo "done" > "$nt/NOTES.md"
+check "a one-word record is not a record" "$(gn x '{"extra":{}}')" 'without a record'
+python3 -c "import sys; open(sys.argv[1],'w').write('x'*200)" "$nt/NOTES.md"
+empty "a real record lets it stop" "$(gn x '{"extra":{}}')"
+rm -f "$nt/NOTES.md"; python3 -c "import sys; open(sys.argv[1],'w').write('y'*200)" "$nt/BLOCKED.md"
+empty "an honest BLOCKED.md counts as a record" "$(gn x '{"extra":{}}')"
+empty "without HH_NOTES_FILE the guard stays out of the way" \
+  "$(printf '%s' '{"extra":{}}' | python3 "$H/hooks/guard-notes.py" 2>/dev/null)"
+check "config registers it on pre_verify" "$(cat "$SRC/config.yaml")" 'pre_verify'
+check "and raises the nudge ceiling"      "$(cat "$SRC/config.yaml")" 'max_verify_nudges: 8'
+
 echo "== guard-read"
 big="$cwd/big.py"; seq 1 900 | sed 's/^/x = /' > "$big"; seq 1 900 > "$cwd/big.md"; seq 1 100 > "$cwd/small.py"
 check "cat on a 900-line file is blocked" \

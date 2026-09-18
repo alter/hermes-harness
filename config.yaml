@@ -85,3 +85,6 @@ hooks:
       command: "python3 ~/.hermes/harness/hooks/guard-read.py"
       timeout: 10
       fail_closed: false
+  pre_verify:
+    - command: "python3 ~/.hermes/harness/hooks/guard-notes.py"
+      timeout: 10

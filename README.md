@@ -39,7 +39,7 @@ If that last line prints nothing, stop and fix the server. Everything downstream
 
 ```bash
 pip install pyyaml
-./selftest.sh          # 78 checks on this checkout, installs nothing
+./selftest.sh          # 87 checks on this checkout, installs nothing
 ./install.sh           # merges into ~/.hermes/config.yaml, copies the harness to ~/.hermes/harness
 ./selftest.sh ~/.hermes
 ```
@@ -95,6 +95,12 @@ a warm cache — in one measured run 452k of the 499k tokens were cache reads �
 investigation. The loop records the `session_id` from the run and the next attempt continues it with a short
 prompt to pick up where it stopped and to leave notes this time. The session id is cleared when the task reaches
 `review` or `blocked`, or when someone resets it to `todo`.
+
+`hooks/guard-notes.py` runs on `pre_verify` and refuses to let a turn end when the agent edited files and wrote
+no record: it names the paths that changed and says what the note must contain. This is the one place Hermes's
+Stop-hook analogue actually helps — it fires exactly on turns that ran `write_file` or `patch`, which is the case
+where an unexplained diff would otherwise reach a reviewer. It is a nudge, not a wall: `agent.max_verify_nudges`
+(raised to 8 here) caps how many times it can insist, and an honest `BLOCKED.md` counts as a record.
 
 **The loop does not decide whether the work is any good, and that is deliberate.** In a real tree `OUTCOME`
 describes what must become true and `VERIFY` lists criteria a human reviewer judges — neither is a path to stat

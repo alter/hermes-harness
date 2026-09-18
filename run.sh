@@ -145,6 +145,7 @@ PY
   session_file="$STATE/sessions/$name"
   resume_id=$(cat "$session_file" 2>/dev/null || true)
   notes_dir="$WORKDIR/.hermes-notes/$name"
+  export HH_NOTES_FILE="$notes_dir/NOTES.md"
   rm -rf "$notes_dir" 2>/dev/null || true
   mkdir -p "$notes_dir"
 
