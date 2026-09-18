@@ -101,6 +101,15 @@ Knobs: `HH_MAX_TASKS` — how many tasks to **attempt** before stopping, 0 for u
 `HH_PROFILE`, `HH_TASK_ROOT`, and `HH_WORKDIR` — the directory the agent works in, when it should not be the
 one holding the task tree (see below).
 
+## What the harness does not put its name on
+
+A commit the loop makes carries the repository's own configured identity — the same author as any other commit
+there. It does not stamp the tool into the author field, the email or the message, and it refuses to commit at
+all rather than invent an identity when git has none configured. What made a change is the owner's to disclose,
+wherever a project asks for it; a tool that announces itself in every log line takes that choice away.
+
+The same holds for what the agent writes. `NOTES.md` records what was done and measured, not what produced it.
+
 ## What stops the agent touching `verify:`
 
 `hooks/guard-paths.py` on `pre_tool_call`, `fail_closed: true`, matching `write_file|patch|terminal`. The whole

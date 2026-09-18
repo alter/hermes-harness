@@ -201,10 +201,16 @@ PY
   rm -f "$attempts_file"
   finished=$((finished + 1))
 
+  # The commit is the owner's, made with the repository's own identity. Stamping
+  # the tool into the author field announces what made the change to everyone who
+  # ever reads the log, which is not this harness's call to make.
   if [ -e "$WORKDIR/.git" ]; then
-    ( cd "$WORKDIR" && git add -- . ':!tasks' ':!.hermes-notes' >/dev/null 2>&1 || true
-      git -c user.name="hermes-harness" -c user.email="hermes@localhost" \
-          commit -q -m "$name: $(section "$task" GOAL | head -n 1)" >/dev/null 2>&1 || true )
+    if ! ( cd "$WORKDIR" && git config user.email >/dev/null 2>&1 ); then
+      echo "   not committing: git has no user.email here; set one and commit yourself"
+    else
+      ( cd "$WORKDIR" && git add -- . ':!tasks' ':!.hermes-notes' >/dev/null 2>&1 || true
+        git commit -q -m "$name: $(section "$task" GOAL | head -n 1)" >/dev/null 2>&1 || true )
+    fi
   fi
 
 done
