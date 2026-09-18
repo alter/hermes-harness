@@ -143,21 +143,31 @@ def build_prompt(root: pathlib.Path, task_dir: pathlib.Path, notes: str = "") ->
         "",
         "Finish by printing one line: DONE <what is now true> or BLOCKED <what is missing>.",
     ]
-    check_file = task_dir / "CHECK.md"
-    if check_file.exists():
-        parts[5:5] = ["", "The project's own check was run against your work and it went backwards.",
-                      "This is why the task is open again — answer it first:", "",
-                      check_file.read_text(encoding="utf-8").strip()[:8000], ""]
+    # A re-run is announced at the top and argued at the bottom. Buried in the
+    # middle, behind two hundred lines of task, it is read as background.
+    banner: list[str] = []
+    trailing: list[str] = []
     review_file = task_dir / "REVIEW.md"
     if review_file.exists():
-        verdict = review_file.read_text(encoding="utf-8").strip()
-        parts[5:5] = ["", "This task was reviewed and sent back. The review is the reason you are here again;",
-                      "read it before you touch anything, and answer it rather than starting over:", "",
-                      verdict[:8000], ""]
+        banner.append("- Your previous work on this task was reviewed and sent back. The review is at the end"
+                      " of this message. Answer it; do not start the thinking over.")
+        trailing += ["", "## The review that sent this task back", "",
+                     review_file.read_text(encoding="utf-8").strip()[:8000]]
+    check_file = task_dir / "CHECK.md"
+    if check_file.exists():
+        banner.append("- The project's own check went backwards on your previous attempt. What it printed is"
+                      " at the end of this message.")
+        trailing += ["", "## The project's own check on your previous attempt", "",
+                     check_file.read_text(encoding="utf-8").strip()[:8000]]
     if notes_file.exists():
         tail = notes_file.read_text(encoding="utf-8").strip().splitlines()[-20:]
         if tail:
-            parts[5:5] = ["", "Earlier notes on this task (the tail of NOTES.md):", "", "\n".join(tail), ""]
+            trailing += ["", "## The tail of your earlier notes on this task", "", "\n".join(tail)]
+    if banner:
+        parts[1:1] = ["", "This is not a first attempt:"] + banner
+    if trailing:
+        closing = parts.pop()  # the line that tells it how to finish stays last
+        parts += trailing + ["", closing]
     return "\n".join(parts)
 
 

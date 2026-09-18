@@ -206,6 +206,13 @@ check "the review prompt says notes are claims"       "$out" 'not evidence'
 printf '# Review — failed\n\nthe second argument is unchecked\n' > "$rv/REVIEW.md"
 check "a returned task carries its review into the next run" \
   "$(python3 "$H/tasks.py" --root "$TMP" prompt "$rv" --notes /tmp/n 2>&1)" 'the second argument is unchecked'
+prompt_out=$(python3 "$H/tasks.py" --root "$TMP" prompt "$rv" --notes /tmp/n 2>&1)
+check "and says so in its first lines, not halfway down" \
+  "$(printf '%s' "$prompt_out" | head -n 5)" 'not a first attempt'
+check "the review is argued at the end, where it is read last" \
+  "$(printf '%s' "$prompt_out" | tail -n 12)" 'the second argument is unchecked'
+check "the closing instruction still comes last" \
+  "$(printf '%s' "$prompt_out" | tail -n 1)" 'DONE'
 rvs=$(cat "$SRC/review.sh")
 check "the review runs with permissions that deny writes" "$rvs" 'permission-mode dontAsk'
 check "the review asks for a structured verdict"          "$rvs" 'json-schema'

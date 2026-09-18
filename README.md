@@ -39,7 +39,7 @@ If that last line prints nothing, stop and fix the server. Everything downstream
 
 ```bash
 pip install pyyaml
-./selftest.sh          # 139 checks on this checkout, installs nothing
+./selftest.sh          # 142 checks on this checkout, installs nothing
 ./install.sh           # merges into ~/.hermes/config.yaml, copies the harness to ~/.hermes/harness
 ./selftest.sh ~/.hermes
 ```
@@ -179,9 +179,10 @@ refused `python3 -m pytest -q`, and matching on the first word alone threw away 
 for nine minutes. `HH_REVIEW_MAX_ROUNDS` (2) unusable reviews in a row block the task rather than
 loop on it.
 
-`failed` is the interesting case: the task goes back to `todo` with its attempt counter and session cleared, and
-`REVIEW.md` is injected at the top of the next prompt — so the worker answers the review instead of starting the
-thinking over.
+`failed` is the interesting case: the task goes back to `todo` with its attempt counter and session cleared,
+and the next prompt is built around the review — announced in its first lines, quoted in full at the end, where
+a long prompt is read most closely. The task body sits between them, as the order it always was. A review
+buried in the middle, behind two hundred lines of task, is read as background and answered as background.
 
 `HH_REVIEW_ONLY=<task path>` reviews that one task and stops — the queue runs in priority order, which is
 rarely the order a first look wants.
