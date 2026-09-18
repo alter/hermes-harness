@@ -87,6 +87,15 @@ One loop, one task at a time:
 6. `BLOCKED.md` written by the agent, or `HH_MAX_ATTEMPTS` (3) attempts without progress → `status: blocked`.
    Putting the task back to `todo` clears its attempt counter, so a reset really is a reset.
 
+**A task that stays open resumes its session; it does not start over.** Hermes ends a turn the moment the model
+answers with prose instead of an action, so an agent that is halfway through a diagnosis simply stops, exit 0,
+mid-sentence. Its Stop-hook analogue (`pre_verify`) only fires on a turn that ran `write_file` or `patch`, so a
+turn spent reading and running commands gets no nudge at all. Starting the next attempt from scratch throws away
+a warm cache — in one measured run 452k of the 499k tokens were cache reads — and repeats the same
+investigation. The loop records the `session_id` from the run and the next attempt continues it with a short
+prompt to pick up where it stopped and to leave notes this time. The session id is cleared when the task reaches
+`review` or `blocked`, or when someone resets it to `todo`.
+
 **The loop does not decide whether the work is any good, and that is deliberate.** In a real tree `OUTCOME`
 describes what must become true and `VERIFY` lists criteria a human reviewer judges — neither is a path to stat
 or a command to run. A loop that guesses a path out of prose does not fail loudly; it silently throws away work

@@ -20,7 +20,7 @@ LOGS="$STATE/logs"
 command -v hermes >/dev/null 2>&1 || { echo "hermes is not on PATH" >&2; exit 1; }
 [ -d "$ROOT" ] || { echo "no task tree at $ROOT" >&2; exit 1; }
 [ -f "$HARNESS/tasks.py" ] || { echo "harness not installed at $HARNESS (run install.sh)" >&2; exit 1; }
-mkdir -p "$LOGS" "$STATE/attempts"
+mkdir -p "$LOGS" "$STATE/attempts" "$STATE/sessions"
 printf '*\n' > "$STATE/.gitignore"
 
 LOCK="$STATE/run.lock"
@@ -120,7 +120,7 @@ for line in pathlib.Path(sys.argv[1], "labels.txt").read_text(encoding="utf-8").
 PY
 )" = "todo" ] && [ "$attempts" -gt 0 ]; then
     echo "== $name: status was reset to todo, so the attempt counter goes with it"
-    rm -f "$attempts_file"
+    rm -f "$attempts_file" "$STATE/sessions/$name"
     attempts=0
   fi
 
@@ -142,16 +142,55 @@ PY
   tasks set "$task" status in_progress
   printf '%s' "$((attempts + 1))" > "$attempts_file"
 
+  session_file="$STATE/sessions/$name"
+  resume_id=$(cat "$session_file" 2>/dev/null || true)
   notes_dir="$WORKDIR/.hermes-notes/$name"
   rm -rf "$notes_dir" 2>/dev/null || true
   mkdir -p "$notes_dir"
 
   before=$(work_fingerprint)
+  if [ -n "$resume_id" ]; then
+    echo "   resuming session $resume_id rather than starting over"
+    prompt_source=continuation
+  else
+    prompt_source=task
+  fi
   set +e
-  tasks prompt "$task" --notes "$notes_dir" | ( cd "$WORKDIR" && hermes ${PROFILE:+-p "$PROFILE"} chat \
-      -Q --format stream-json --query-file - --accept-hooks ) > "$LOGS/$name.ndjson" 2>"$LOGS/$name.err"
+  if [ "$prompt_source" = "continuation" ]; then
+    printf '%s\n' \
+      "You stopped in the middle of this task: your last turn ended with prose instead of an action." \
+      "Pick up exactly where you left off — the work you already did is still there." \
+      "" \
+      "Before you stop this time, write $notes_dir/NOTES.md: what you did, what you measured," \
+      "what you decided, and what you could not settle. A run that leaves no record does not count," \
+      "and \"there was nothing left to do\" is itself a finding worth writing down." \
+      "If something blocks you, write $notes_dir/BLOCKED.md instead and stop." \
+      | ( cd "$WORKDIR" && hermes ${PROFILE:+-p "$PROFILE"} chat --resume "$resume_id" \
+          -Q --format stream-json --query-file - --accept-hooks ) > "$LOGS/$name.ndjson" 2>"$LOGS/$name.err"
+  else
+    tasks prompt "$task" --notes "$notes_dir" | ( cd "$WORKDIR" && hermes ${PROFILE:+-p "$PROFILE"} chat \
+        -Q --format stream-json --query-file - --accept-hooks ) > "$LOGS/$name.ndjson" 2>"$LOGS/$name.err"
+  fi
   rc=$?
   set -e
+
+  new_session=$(python3 - "$LOGS/$name.ndjson" <<'PY'
+import json, pathlib, sys
+last = ""
+for line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace").splitlines():
+    line = line.strip()
+    if not line.startswith("{"):
+        continue
+    try:
+        row = json.loads(line)
+    except ValueError:
+        continue
+    if row.get("type") == "result" and row.get("session_id"):
+        last = row["session_id"]
+print(last)
+PY
+)
+  [ -n "$new_session" ] && printf '%s' "$new_session" > "$session_file"
   after=$(work_fingerprint)
 
   [ -s "$notes_dir/NOTES.md" ] && { printf '\n## %s (attempt %s)\n\n' "$(date -u +%Y-%m-%dT%H:%MZ)" \
@@ -171,6 +210,7 @@ PY
   if [ -s "$notes_dir/BLOCKED.md" ]; then
     echo "   the agent says it is blocked"
     tasks set "$task" status blocked
+    rm -f "$session_file"
     note "$task" "harness: agent wrote BLOCKED.md, exit $rc"
     continue
   fi
@@ -195,11 +235,16 @@ PY
   fi
 
   touched=$(changed_files)
-  echo "   the working tree changed, $touched path(s) differ from HEAD -> review"
-  note "$task" "harness: the working tree changed, $touched path(s) differ from HEAD$(
+  if [ "$after" = "$before" ]; then
+    what="the working tree is unchanged, but notes were written"
+  else
+    what="the working tree changed, $touched path(s) differ from HEAD"
+  fi
+  echo "   $what -> review"
+  note "$task" "harness: $what$(
       [ -n "$verify_cmd" ] && printf ', `%s` exited %s' "$verify_cmd" "$verify_rc"); handed to review"
   tasks set "$task" status review
-  rm -f "$attempts_file"
+  rm -f "$attempts_file" "$session_file"
   finished=$((finished + 1))
 
   # The commit is the owner's, made with the repository's own identity. Stamping
