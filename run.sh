@@ -75,6 +75,21 @@ for i, (name, _, end) in enumerate(marks):
 PY
 }
 
+# What the working tree holds, not how many lines git prints about it: an edit
+# inside an already-modified file moves no counter, and a count says nothing
+# about what changed.
+work_fingerprint() {
+  ( cd "$WORKDIR" || exit 0
+    { git diff HEAD -- . ':!.hermes-notes' 2>/dev/null
+      git ls-files -o --exclude-standard -- . ':!.hermes-notes' 2>/dev/null \
+        | while IFS= read -r f; do printf '%s ' "$f"; sha1sum "$f" 2>/dev/null | cut -d' ' -f1; echo; done
+    } | sha1sum | cut -d' ' -f1 ) || echo none
+}
+
+changed_files() {
+  ( cd "$WORKDIR" && git status --porcelain -- . ':!.hermes-notes' 2>/dev/null | wc -l ) || echo 0
+}
+
 verify_command() {
   section "$1" VERIFY | grep -oE '`[^`]+`' | head -n 1 | tr -d '`' || true
 }
@@ -130,14 +145,13 @@ PY
   rm -rf "$notes_dir" 2>/dev/null || true
   mkdir -p "$notes_dir"
 
-  changed_count() { ( cd "$WORKDIR" && git status --porcelain -- . ':!.hermes-notes' 2>/dev/null | wc -l ) || echo 0; }
-  before=$(changed_count)
+  before=$(work_fingerprint)
   set +e
   tasks prompt "$task" --notes "$notes_dir" | ( cd "$WORKDIR" && hermes ${PROFILE:+-p "$PROFILE"} chat \
       -Q --format stream-json --query-file - --accept-hooks ) > "$LOGS/$name.ndjson" 2>"$LOGS/$name.err"
   rc=$?
   set -e
-  after=$(changed_count)
+  after=$(work_fingerprint)
 
   [ -s "$notes_dir/NOTES.md" ] && { printf '\n## %s (attempt %s)\n\n' "$(date -u +%Y-%m-%dT%H:%MZ)" \
       "$((attempts + 1))" >> "$task/NOTES.md"; cat "$notes_dir/NOTES.md" >> "$task/NOTES.md"; }
@@ -173,14 +187,15 @@ PY
     continue
   fi
 
-  if [ "$after" -le "$before" ] && [ ! -s "$notes_dir/NOTES.md" ]; then
-    echo "   nothing changed and nothing recorded -> stays open"
-    note "$task" "harness: run exited 0 but changed no file and wrote no notes; log $LOGS/$name.ndjson"
+  if [ "$after" = "$before" ] && [ ! -s "$notes_dir/NOTES.md" ]; then
+    echo "   the working tree is byte-for-byte what it was, and no notes were written -> stays open"
+    note "$task" "harness: run exited 0 but left the working tree unchanged and wrote no notes; log $LOGS/$name.ndjson"
     continue
   fi
 
-  echo "   $((after - before)) file(s) changed, notes recorded -> review"
-  note "$task" "harness: $((after - before)) file(s) changed in the working directory$(
+  touched=$(changed_files)
+  echo "   the working tree changed, $touched path(s) differ from HEAD -> review"
+  note "$task" "harness: the working tree changed, $touched path(s) differ from HEAD$(
       [ -n "$verify_cmd" ] && printf ', `%s` exited %s' "$verify_cmd" "$verify_rc"); handed to review"
   tasks set "$task" status review
   rm -f "$attempts_file"

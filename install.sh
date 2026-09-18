@@ -22,9 +22,18 @@ printf 'source=%s\ntarget=%s\ndate=%s\n' "$SRC" "$TARGET" "$STAMP" > "$BACKUP/IN
 
 echo "== install -> $HARNESS"
 mkdir -p "$HARNESS/hooks"
-cp "$SRC/tasks.py" "$HARNESS/tasks.py"
-cp "$SRC/run.sh" "$HARNESS/run.sh"
-cp "$SRC"/hooks/*.py "$HARNESS/hooks/"
+
+# Replace by rename, never in place: bash reads a script as it runs it, so
+# overwriting run.sh under a live loop makes it misread its own body.
+put() {
+  local src=$1 dst=$2 tmp="$2.incoming.$$"
+  cp "$src" "$tmp"
+  [ -x "$src" ] && chmod +x "$tmp"
+  mv -f "$tmp" "$dst"
+}
+put "$SRC/tasks.py" "$HARNESS/tasks.py"
+put "$SRC/run.sh" "$HARNESS/run.sh"
+for h in "$SRC"/hooks/*.py; do put "$h" "$HARNESS/hooks/$(basename "$h")"; done
 chmod +x "$HARNESS/run.sh"
 for f in "$HARNESS/tasks.py" "$HARNESS"/hooks/*.py; do
   python3 -c "import ast,pathlib,sys; ast.parse(pathlib.Path(sys.argv[1]).read_text())" "$f"
