@@ -107,13 +107,68 @@ m=c.get('model')
 print((m or {}).get('default') if isinstance(m, dict) else m)" "$TARGET/config.yaml")
 echo "   model: $model"
 
-if [ -f "$TARGET/shell-hooks-allowlist.json" ] && grep -q "$HARNESS/hooks" "$TARGET/shell-hooks-allowlist.json" 2>/dev/null; then
-  echo "== hook consent"
-  echo "   the hook scripts were just replaced, so their approved fingerprints are stale."
-  echo "   \`hermes hooks doctor\` will warn until you refresh them:"
-  for h in "$HARNESS"/hooks/*.py; do echo "     hermes hooks revoke \"python3 $h\""; done
-  echo "     echo ok | hermes chat -Q --query-file - --accept-hooks"
-  echo "     hermes hooks doctor"
+echo "== hook consent"
+# Hermes ties an approval to the script's fingerprint, so replacing a hook
+# invalidates it. register_from_config(..., accept_hooks=True) is the same
+# public call the CLI makes at startup: it re-records the approvals against the
+# files just installed. No model call, no running server, no hand-edited JSON.
+hermes_python() {
+  for candidate in python3 python; do
+    command -v "$candidate" >/dev/null 2>&1 || continue
+    "$candidate" -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('agent.shell_hooks') else 1)" 2>/dev/null \
+      && { echo "$candidate"; return 0; }
+  done
+  local launcher head
+  launcher=$(command -v hermes 2>/dev/null) || return 1
+  head=$(head -c 256 "$launcher" 2>/dev/null | tr -d '\000')
+  case "$head" in
+    '#!'*) head=$(printf '%s\n' "$head" | head -n 1 | sed 's/^#![[:space:]]*//; s/^.*\/env //') ;;
+    *) return 1 ;;
+  esac
+  case "$head" in *[!a-zA-Z0-9/_.@:-]*) return 1 ;; esac
+  [ -x "$head" ] && "$head" -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('agent.shell_hooks') else 1)" 2>/dev/null \
+    && { echo "$head"; return 0; }
+  return 1
+}
+
+if PY=$(hermes_python); then
+  HERMES_HOME="$TARGET" "$PY" - "$HARNESS" <<'PYAPPROVE'
+import sys
+from hermes_cli.config import load_config
+from agent.shell_hooks import (
+    allowlist_entry_for, iter_configured_hooks, register_from_config, revoke, script_mtime_iso,
+)
+
+harness = sys.argv[1]
+mine = [h for h in iter_configured_hooks(load_config()) if harness in h.command]
+if not mine:
+    print("   no harness hooks in this config; nothing to approve")
+    sys.exit(0)
+
+# An approval is matched by (event, command) alone, so an entry whose recorded
+# fingerprint is stale still counts as present and would never be refreshed.
+# Drop ours first, exactly as `hermes hooks revoke` does, then re-record.
+for h in mine:
+    revoke(h.command)
+register_from_config(load_config(), accept_hooks=True)
+
+failed = 0
+for h in mine:
+    entry = allowlist_entry_for(h.event, h.command)
+    fresh = entry is not None and entry.get("script_mtime_at_approval") == script_mtime_iso(h.command)
+    failed += 0 if fresh else 1
+    print(f"   {'approved' if fresh else 'NOT approved'}: {h.event} -> {h.command.split('/')[-1]}")
+sys.exit(1 if failed else 0)
+PYAPPROVE
+  rc=$?
+  [ "$rc" -eq 0 ] && echo "   verify with: hermes hooks doctor" \
+                  || echo "   some hooks were not approved; run \`hermes hooks doctor\`" >&2
+else
+  echo "   could not import agent.shell_hooks from any python on PATH." >&2
+  echo "   Approve by hand, or the hooks will not fire:" >&2
+  for h in "$HARNESS"/hooks/*.py; do echo "     hermes hooks revoke \"python3 $h\"" >&2; done
+  echo "     echo ok | hermes chat -Q --query-file - --accept-hooks" >&2
+  echo "     hermes hooks doctor" >&2
 fi
 
 cat <<EOF
