@@ -104,6 +104,10 @@ PY
   fi
 
   echo "== $name (attempt $((attempts + 1))/$MAX_ATTEMPTS)"
+  if [ -f "$task/BLOCKED.md" ]; then
+    mv -f "$task/BLOCKED.md" "$task/BLOCKED.previous.md"
+    echo "   the previous BLOCKED.md is kept as BLOCKED.previous.md"
+  fi
   tasks set "$task" status in_progress
   printf '%s' "$((attempts + 1))" > "$attempts_file"
 
