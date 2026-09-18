@@ -13,6 +13,7 @@ PROFILE=${HH_PROFILE:-}
 MAX_TASKS=${HH_MAX_TASKS:-0}
 MAX_ATTEMPTS=${HH_MAX_ATTEMPTS:-3}
 RUN_VERIFY=${HH_RUN_VERIFY:-1}
+COMMIT=${HH_COMMIT:-1}
 STATE="$PROJECT/.hermes-harness"
 LOGS="$STATE/logs"
 
@@ -204,12 +205,21 @@ PY
   # The commit is the owner's, made with the repository's own identity. Stamping
   # the tool into the author field announces what made the change to everyone who
   # ever reads the log, which is not this harness's call to make.
-  if [ -e "$WORKDIR/.git" ]; then
+  if [ "$COMMIT" = "0" ]; then
+    echo "   not committing (HH_COMMIT=0); the work is left for review"
+  elif [ -e "$WORKDIR/.git" ]; then
     if ! ( cd "$WORKDIR" && git config user.email >/dev/null 2>&1 ); then
       echo "   not committing: git has no user.email here; set one and commit yourself"
+      note "$task" "harness: not committed — git has no identity configured in $WORKDIR"
     else
-      ( cd "$WORKDIR" && git add -- . ':!tasks' ':!.hermes-notes' >/dev/null 2>&1 || true
-        git commit -q -m "$name: $(section "$task" GOAL | head -n 1)" >/dev/null 2>&1 || true )
+      ( cd "$WORKDIR" && git add -- . ":!$guard_root" ':!.hermes-notes' >/dev/null 2>&1 || true )
+      if commit_out=$( cd "$WORKDIR" && git commit -m "$name: $(section "$task" GOAL | head -n 1)" 2>&1 ); then
+        echo "   committed in $WORKDIR"
+      else
+        echo "   NOT committed — the work is safe but uncommitted:"
+        printf '%s\n' "$commit_out" | tail -n 4 | sed 's/^/     /'
+        note "$task" "harness: commit refused in $WORKDIR; $(printf '%s' "$commit_out" | tail -n 1)"
+      fi
     fi
   fi
 
