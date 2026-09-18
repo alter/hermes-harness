@@ -27,6 +27,9 @@ for f in "$H"/hooks/*.py "$H/tasks.py"; do
 done
 for f in "$SRC"/*.sh; do
   if bash -n "$f" 2>/dev/null; then ok "bash -n $(basename "$f")"; else bad "bash -n $(basename "$f")" "syntax error"; fi
+  # A script that arrives without its executable bit is a script nobody can run,
+  # and git records the bit, so losing it survives the next clone.
+  if [ -x "$f" ]; then ok "$(basename "$f") is executable"; else bad "$(basename "$f") is executable" "mode 644"; fi
 done
 if python3 -c "import yaml,sys; yaml.safe_load(open(sys.argv[1]))" "$SRC/config.yaml" 2>/dev/null
 then ok "config.yaml is valid YAML"; else bad "config.yaml is valid YAML" "does not parse"; fi
