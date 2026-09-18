@@ -22,9 +22,24 @@ command -v hermes >/dev/null 2>&1 || { echo "hermes is not on PATH" >&2; exit 1;
 mkdir -p "$LOGS" "$STATE/attempts"
 printf '*\n' > "$STATE/.gitignore"
 
+LOCK="$STATE/run.lock"
+if ! ( set -o noclobber; printf '%s %s\n' "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$LOCK" ) 2>/dev/null; then
+  holder=$(cut -d' ' -f1 "$LOCK" 2>/dev/null)
+  if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+    echo "another run is already working this tree: pid $holder, since $(cut -d' ' -f2 "$LOCK" 2>/dev/null)" >&2
+    echo "two loops share the task state and the log names, so this one stops." >&2
+    exit 1
+  fi
+  echo "note: a stale lock from pid ${holder:-unknown} is being taken over"
+  printf '%s %s\n' "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$LOCK"
+fi
+release_lock() { [ "$(cut -d' ' -f1 "$LOCK" 2>/dev/null)" = "$$" ] && rm -f "$LOCK"; }
+trap release_lock EXIT
+
 interrupted() {
   echo
   echo "== interrupted: stopping here, the current task keeps its status and its attempt count"
+  release_lock
   exit 130
 }
 trap interrupted INT TERM

@@ -93,6 +93,10 @@ or a command to run. A loop that guesses a path out of prose does not fail loudl
 that was done. So the loop records evidence and hands over. `review` means "the agent ran and left something
 behind"; only the reviewer turns that into `done` / `verify: passed`, and the loop never writes either.
 
+Only one loop may work a task tree at a time: the second is refused with the first one's pid, because two
+loops share the attempt counters, the status field and the log file names, and the mess that makes is not
+obvious while it is happening. A lock left by a dead process is taken over with a note.
+
 Knobs: `HH_MAX_TASKS` — how many tasks to **attempt** before stopping, 0 for until nothing is ready; `HH_MAX_ATTEMPTS` — how many runs one task gets before it is blocked (the counter lives in `.hermes-harness/attempts/` and is cleared when someone puts the task back to `todo`); `HH_RUN_VERIFY=0` to skip the check,
 `HH_PROFILE`, `HH_TASK_ROOT`, and `HH_WORKDIR` — the directory the agent works in, when it should not be the
 one holding the task tree (see below).
