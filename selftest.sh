@@ -214,6 +214,8 @@ check "the review never commits"                          "$(printf '%s' "$rvs" 
 check "the review never bypasses permissions"             "$(printf '%s' "$rvs" | grep -c 'skip-permissions\|bypassPermissions' || true)" '^0$'
 check "one named task can be reviewed on its own"        "$rvs" 'HH_REVIEW_ONLY'
 check "a task outside review is refused by name"         "$rvs" 'not review'
+check "the previous envelope is kept, not overwritten"   "$rvs" 'review.previous.json'
+check "the price of a review is printed"                 "$rvs" 'total_cost_usd'
 
 vd="$TMP/vd"; mkdir -p "$vd"
 env_file="$TMP/envelope.json"

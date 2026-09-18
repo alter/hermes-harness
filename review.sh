@@ -139,6 +139,10 @@ while :; do
            "Bash(git ls-files:*)" "Bash(rg:*)" "Bash(sed -n:*)" "Bash(wc:*)" "Bash(ls:*)")
   [ -n "$TEST_CMD" ] && allowed+=("Bash(${TEST_CMD%% *}:*)") || true
 
+  # One generation back is kept: the second round overwriting the first is how
+  # the cost and the turn count of a good review get lost.
+  [ -f "$LOGS/$name.review.json" ] && mv -f "$LOGS/$name.review.json" "$LOGS/$name.review.previous.json" || true
+
   set +e
   tasks review-prompt "$task" --diff "$diff_file" --test-command "$TEST_CMD" --workdir "$WORKDIR" \
     | ( cd "$WORKDIR" && claude -p \
@@ -160,6 +164,13 @@ while :; do
   read -r verdict denied usable <<<"$outcome"
 
   echo "   verdict: $verdict (denied commands: $denied, usable: $usable)"
+  printf '   cost: %s\n' "$(python3 -c "
+import json,sys
+try:
+    envelope = json.load(open(sys.argv[1]))
+    print(f\"{envelope.get('total_cost_usd', 0):.2f} USD over {envelope.get('num_turns', 0)} turns\")
+except Exception:
+    print('the envelope could not be read')" "$LOGS/$name.review.json")"
 
   if [ "$usable" != "yes" ]; then
     rounds=$((rounds + 1))
