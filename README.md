@@ -125,10 +125,16 @@ task tree in it, and there is nothing left to defend:
 git -C /path/to/project worktree add --no-checkout /home/you/project-work agent/work
 cd /home/you/project-work
 git sparse-checkout init --no-cone
-git sparse-checkout set '/*' '!/tasks/'
+git sparse-checkout set '/*' '!/tasks/'        # the name the tree has IN THAT COMMIT
 git checkout
 HH_WORKDIR=/home/you/project-work ~/.hermes/harness/run.sh /path/to/project
 ```
+
+Check it: `ls` in the worktree must not show the tree under any name. An uncommitted rename is the trap —
+sparse-checkout excludes the name the *commit* uses, not the name your working copy shows, so a tree renamed but
+not yet committed stays fully checked out under its old name and the isolation silently does nothing. `run.sh`
+warns on startup when it finds the tree inside the working directory, and exports `HH_PROTECTED_ROOT` so the
+guard defends the directory the tree is actually called rather than a name baked in at install time.
 
 The loop keeps reading the tree from the real checkout, the agent never sees it, and the work lands on its own
 branch. `run.sh` says so on every start while the tree is still inside the agent's working directory. Stronger

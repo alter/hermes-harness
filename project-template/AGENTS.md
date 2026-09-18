@@ -14,15 +14,18 @@ names a path there or a file belonging to it, including one an interpreter would
 Rephrasing will not help, and neither will building the path in pieces. You do not need to commit: the harness
 commits your code for you.
 
-You do not decide that a task is done. `status:` is written by the harness from the evidence, `verify:` by a
-reviewer who did not write this code. Claiming either is not persuasion, it is a lie the next run will trip over.
+You do not decide that a task is done. `status:` is written by the harness from what you leave behind, `verify:`
+by a reviewer who did not write this code. Claiming either is not persuasion, it is a lie the next run trips over.
+Say plainly what you did not settle: an honest gap is information, an overstatement is a defect the reviewer has
+to find twice.
 
 ## Finishing a task
 
-- The artefact named under `OUTCOME` must exist at the path it names, in the repository. Nothing else counts as
-  finished — not a plan, not an explanation, not a file in `/tmp`.
-- Run the command under `VERIFY` yourself before you stop, and record what it printed. If it fails, say so in
-  `NOTES.md` and leave the task open. A failing check reported as a pass is the worst outcome available to you.
+- `OUTCOME` says what must become true in the repository. Make it true, and leave the evidence where a reviewer
+  will find it — a file in the repository, not a plan, not an explanation, not something in `/tmp`.
+- `VERIFY` is the list of criteria a human weighs afterwards, not a command for you, unless one is written there
+  as a shell command in backticks. If it is, run it and record what it printed. A failing check reported as a
+  pass is the worst outcome available to you.
 - `SCOPE` lines beginning `−` are boundaries. Do not cross them. Work the boundary forces is a different task.
 - Append to `NOTES.md` before you stop, every time, even when the run went badly. That file is the only memory
   the next run has.

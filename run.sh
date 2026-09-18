@@ -21,6 +21,20 @@ command -v hermes >/dev/null 2>&1 || { echo "hermes is not on PATH" >&2; exit 1;
 [ -f "$HARNESS/tasks.py" ] || { echo "harness not installed at $HARNESS (run install.sh)" >&2; exit 1; }
 mkdir -p "$LOGS" "$STATE/attempts"
 
+interrupted() {
+  echo
+  echo "== interrupted: stopping here, the current task keeps its status and its attempt count"
+  exit 130
+}
+trap interrupted INT TERM
+
+guard_root=${HH_PROTECTED_ROOT:-$(basename "$ROOT")}
+if [ -e "$WORKDIR/$guard_root" ]; then
+  echo "WARNING: $WORKDIR/$guard_root exists — the agent can see the task tree."
+  echo "         Exclude it from the worktree, or the guard is the only thing in the way."
+fi
+export HH_PROTECTED_ROOT="$guard_root"
+
 case "$ROOT" in
   "$WORKDIR"/*) echo "note: the task tree is inside the agent's working directory."
                 echo "      Only guard-paths.py stands between the agent and it, and a guard that reads"
@@ -124,6 +138,13 @@ PY
     tasks set "$task" status blocked
     note "$task" "harness: agent wrote BLOCKED.md, exit $rc"
     continue
+  fi
+
+  if [ "$rc" -eq 130 ] || [ "$rc" -eq 143 ]; then
+    printf '%s' "$attempts" > "$attempts_file"
+    echo "   the run was interrupted (exit $rc); the attempt does not count"
+    note "$task" "harness: run interrupted (exit $rc) before it could finish"
+    interrupted
   fi
 
   if [ "$rc" -ne 0 ]; then
