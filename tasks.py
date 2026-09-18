@@ -7,7 +7,8 @@ import re
 import sys
 
 READY_STATUSES = {"todo", "in_progress"}
-AGENT_WRITABLE_LABELS = {"status"}
+WRITABLE_LABELS = {"agent": {"status"}, "reviewer": {"status", "verify"}}
+NO_DEPENDS = {"-", "none", "нет", "n/a", "na"}
 PRIORITY_ORDER = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
 SECTION_RE = re.compile(r"^(TASK:|GOAL|CONTEXT|SCOPE|OUTCOME|VERIFY|ROLE|DEPENDS)\b.*$", re.M)
 
@@ -25,9 +26,12 @@ def read_labels(task_dir: pathlib.Path) -> dict[str, str]:
     return out
 
 
-def write_label(task_dir: pathlib.Path, key: str, value: str) -> None:
-    if key not in AGENT_WRITABLE_LABELS:
-        raise ValueError(f"{key} is not ours to write: the harness owns only {sorted(AGENT_WRITABLE_LABELS)}")
+def write_label(task_dir: pathlib.Path, key: str, value: str, role: str = "agent") -> None:
+    allowed = WRITABLE_LABELS.get(role)
+    if allowed is None:
+        raise ValueError(f"no such role: {role}; known roles are {sorted(WRITABLE_LABELS)}")
+    if key not in allowed:
+        raise ValueError(f"{key} is not {role}'s to write: that role owns only {sorted(allowed)}")
     path = task_dir / "labels.txt"
     lines = path.read_text(encoding="utf-8").splitlines()
     replaced = False
@@ -46,7 +50,8 @@ def task_dirs(root: pathlib.Path) -> list[pathlib.Path]:
 
 
 def depends_of(labels: dict[str, str]) -> list[str]:
-    return [d for d in re.split(r"[,\s]+", labels.get("depends", "").strip()) if d and d != "-"]
+    raw = re.split(r"[,\s]+", labels.get("depends", "").strip())
+    return [d for d in raw if d and d.lower() not in NO_DEPENDS]
 
 
 def depends_met(root: pathlib.Path, labels: dict[str, str]) -> tuple[bool, str]:
@@ -83,6 +88,19 @@ def next_task(root: pathlib.Path) -> pathlib.Path | None:
         return None
     candidates.sort()
     return candidates[0][2]
+
+
+def queue(root: pathlib.Path, status: str) -> list[pathlib.Path]:
+    out = []
+    for task_dir in task_dirs(root):
+        labels = read_labels(task_dir)
+        if labels.get("status", "") != status:
+            continue
+        if "HUMAN" in re.split(r"[,\s]+", labels.get("role", "")):
+            continue
+        out.append((PRIORITY_ORDER.get(labels.get("priority", ""), 9), str(task_dir), task_dir))
+    out.sort()
+    return [task_dir for _, _, task_dir in out]
 
 
 def section(body: str, name: str) -> str:
@@ -125,10 +143,84 @@ def build_prompt(root: pathlib.Path, task_dir: pathlib.Path, notes: str = "") ->
         "",
         "Finish by printing one line: DONE <what is now true> or BLOCKED <what is missing>.",
     ]
+    review_file = task_dir / "REVIEW.md"
+    if review_file.exists():
+        verdict = review_file.read_text(encoding="utf-8").strip()
+        parts[5:5] = ["", "This task was reviewed and sent back. The review is the reason you are here again;",
+                      "read it before you touch anything, and answer it rather than starting over:", "",
+                      verdict[:8000], ""]
     if notes_file.exists():
         tail = notes_file.read_text(encoding="utf-8").strip().splitlines()[-20:]
         if tail:
             parts[5:5] = ["", "Earlier notes on this task (the tail of NOTES.md):", "", "\n".join(tail), ""]
+    return "\n".join(parts)
+
+
+def build_review_prompt(root: pathlib.Path, task_dir: pathlib.Path, diff: str, test_cmd: str,
+                        workdir: str = "") -> str:
+    body = (task_dir / "task.txt").read_text(encoding="utf-8")
+    labels = read_labels(task_dir)
+    rel = task_dir.relative_to(root.parent) if root.parent in task_dir.parents else task_dir
+    notes_file = task_dir / "NOTES.md"
+    notes = notes_file.read_text(encoding="utf-8").strip() if notes_file.exists() else ""
+    if len(notes) > 12000:
+        notes = notes[-12000:]
+    parts = [
+        f"You are judging one finished piece of work against the task it was given: {rel}",
+        "",
+        "## The task, as it was set",
+        "",
+        body.strip(),
+        "",
+        "Labels: " + ", ".join(f"{k}={v}" for k, v in sorted(labels.items())),
+        "",
+        "OUTCOME states what had to become true in the repository. VERIFY lists the criteria the work is",
+        "judged by. Judge against those two, not against what you would have done.",
+        "",
+        "## What the worker says it did",
+        "",
+        notes or "(no notes were left)",
+        "",
+        "These are claims. They are not evidence, and a confident note is not a passing one.",
+        "",
+        "## The change itself",
+        "",
+        "```diff",
+        diff.strip() or "(no diff was captured; find the change yourself with git)",
+        "```",
+        "",
+        "## How to judge",
+        "",
+        f"You are already in {workdir or 'the working directory the change was made in'}, and every path",
+        "below is relative to it. You can read files and run read-only commands. You cannot write, and",
+        "nothing you do should change the repository. A command that is refused is not a dead end: read",
+        "the file instead, and say in your answer what you could not run.",
+        "",
+        "Do not accept a claim you have not checked. For every criterion in VERIFY, either run something",
+        "that shows it holds, or read the code closely enough to say why it does or does not. Look for the",
+        "failure the task was about, not for tidy code: a change that compiles, passes its own new tests and",
+        "does not do what OUTCOME asked for is a failure. Tests written alongside the change are part of what",
+        "you are judging, not proof: read them and say whether they would catch the thing going wrong.",
+    ]
+    if test_cmd:
+        parts += ["", f"The project's own check is `{test_cmd}`. Run it. Its result is evidence; your"
+                      " impression is not."]
+    parts += [
+        "",
+        "## Your answer",
+        "",
+        "Answer in the schema you were given, and nothing else.",
+        "- verdict `passed`: OUTCOME is true and every criterion in VERIFY holds, and you have the evidence.",
+        "- verdict `failed`: something the task asked for is missing, wrong, or unproven. Say exactly what,",
+        "  and put in `next_step` the one thing that would fix it — the worker reads it and tries again.",
+        "- verdict `blocked`: the work cannot be judged here — the task is ambiguous, or checking it needs",
+        "  something you do not have. Say what is missing. This stops the task and calls a human.",
+        "",
+        "`evidence` carries what you actually ran or read: the claim, the command, and the part of its",
+        "output that settles it. A `passed` verdict with no evidence is refused by the harness, so do not",
+        "give one you cannot support. Say plainly when you are unsure — an honest `failed` costs one more",
+        "run, a wrong `passed` ships the defect.",
+    ]
     return "\n".join(parts)
 
 
@@ -158,9 +250,25 @@ def cmd_prompt(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_queue(args: argparse.Namespace) -> int:
+    root = pathlib.Path(args.root).resolve()
+    found = queue(root, args.status)
+    for task_dir in found:
+        print(task_dir)
+    return 0 if found else 1
+
+
+def cmd_review_prompt(args: argparse.Namespace) -> int:
+    root = pathlib.Path(args.root).resolve()
+    diff = pathlib.Path(args.diff).read_text(encoding="utf-8", errors="replace") if args.diff else ""
+    print(build_review_prompt(root, pathlib.Path(args.task).resolve(), diff, args.test_command,
+                              args.workdir))
+    return 0
+
+
 def cmd_set(args: argparse.Namespace) -> int:
     try:
-        write_label(pathlib.Path(args.task).resolve(), args.key, args.value)
+        write_label(pathlib.Path(args.task).resolve(), args.key, args.value, args.role)
     except ValueError as exc:
         print(exc, file=sys.stderr)
         return 2
@@ -177,10 +285,20 @@ def main() -> int:
     p.add_argument("task")
     p.add_argument("--notes", default="", help="where the agent should write NOTES.md and BLOCKED.md")
     p.set_defaults(func=cmd_prompt)
+    p = sub.add_parser("queue")
+    p.add_argument("status", nargs="?", default="review")
+    p.set_defaults(func=cmd_queue)
+    p = sub.add_parser("review-prompt")
+    p.add_argument("task")
+    p.add_argument("--diff", default="", help="a file holding the change under review")
+    p.add_argument("--test-command", default="", help="the project's own check, if it has one")
+    p.add_argument("--workdir", default="", help="where the reviewer will be standing")
+    p.set_defaults(func=cmd_review_prompt)
     p = sub.add_parser("set")
     p.add_argument("task")
     p.add_argument("key")
     p.add_argument("value")
+    p.add_argument("--as", dest="role", default="agent", choices=sorted(WRITABLE_LABELS))
     p.set_defaults(func=cmd_set)
     args = parser.parse_args()
     return args.func(args)

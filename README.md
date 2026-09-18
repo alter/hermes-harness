@@ -39,7 +39,7 @@ If that last line prints nothing, stop and fix the server. Everything downstream
 
 ```bash
 pip install pyyaml
-./selftest.sh          # 90 checks on this checkout, installs nothing
+./selftest.sh          # 104 checks on this checkout, installs nothing
 ./install.sh           # merges into ~/.hermes/config.yaml, copies the harness to ~/.hermes/harness
 ./selftest.sh ~/.hermes
 ```
@@ -54,7 +54,8 @@ An approval is matched on the pair (event, command), so a hook whose file was re
 it, so an update does not leave you four commands to run. It re-records through `agent.shell_hooks` when it can
 find the python Hermes runs on, and otherwise re-stamps the records that already exist in
 `shell-hooks-allowlist.json`. It never invents consent: a hook you have not approved is still approved at the
-first run, by `hooks_auto_accept` and `--accept-hooks`. `./selftest.sh ~/.hermes` checks the result.
+first run, by `hooks_auto_accept` and `--accept-hooks`. Run against an installed target, `./selftest.sh
+~/.hermes` checks the result — one check per hook, comparing the record to the file on disk.
 
 Then set the model, which the installer deliberately leaves as a placeholder:
 
@@ -122,6 +123,47 @@ obvious while it is happening. A lock left by a dead process is taken over with 
 Knobs: `HH_MAX_TASKS` — how many tasks to **attempt** before stopping, 0 for until nothing is ready; `HH_MAX_ATTEMPTS` — how many runs one task gets before it is blocked (the counter lives in `.hermes-harness/attempts/` and is cleared when someone puts the task back to `todo`); `HH_RUN_VERIFY=0` to skip the check,
 `HH_PROFILE`, `HH_TASK_ROOT`, and `HH_WORKDIR` — the directory the agent works in, when it should not be the
 one holding the task tree (see below).
+
+## Reviewing
+
+```bash
+HH_TEST_COMMAND='python3 -m pytest -q' ~/.hermes/harness/review.sh [project]
+```
+
+The writing loop never decides that work is good; `review.sh` is the half that does. It takes the tasks whose
+`status:` is `review`, highest priority first, skips any whose `ROLE` is `HUMAN`, and for each one hands Claude
+Code the task as it was set, the worker's notes, and the change itself — the commit the loop made, or whatever
+is uncommitted, whichever `.hermes-harness/review/<task>` records. It answers in a fixed schema, and the script,
+not the model, writes the labels:
+
+| verdict | what happens |
+| --- | --- |
+| `passed` | `verify: passed`, `status: done` |
+| `failed` | `verify: failed`, `status: todo`, and `REVIEW.md` goes into the next run's prompt |
+| `blocked` | `status: blocked` — the work cannot be judged here, a human has to settle it |
+
+**The reviewer cannot write.** It runs under `--permission-mode dontAsk` with the write tools removed: reads and
+read-only commands go through, a write is refused and lands in `permission_denials`. Its worst failure is a wrong
+verdict, never a wrong edit. A `passed` verdict with an empty `evidence` list is refused by the script, as is a
+run where the project's own check (`HH_TEST_COMMAND`) was among the commands refused — that review verified
+nothing, whatever it concluded. `HH_REVIEW_MAX_ROUNDS` (2) unusable reviews in a row block the task rather than
+loop on it.
+
+`failed` is the interesting case: the task goes back to `todo` with its attempt counter and session cleared, and
+`REVIEW.md` is injected at the top of the next prompt — so the worker answers the review instead of starting the
+thinking over.
+
+`HH_REVIEW_ONLY=<task path>` reviews that one task and stops — the queue runs in priority order, which is
+rarely the order a first look wants.
+
+Knobs: `HH_REVIEW_MODEL` (`opus`), `HH_REVIEW_EFFORT` (`high`, dropped when the installed `claude` has no
+`--effort`), `HH_REVIEW_BUDGET` (dollars per task, 5), `HH_TEST_COMMAND`, `HH_REVIEW_MAX`, `HH_REVIEW_DIFF_CHARS`
+(200000, after which the diff is truncated and the reviewer is told to read the files). The trust prompt Claude
+Code shows in a new directory does not appear here: `-p` skips it.
+
+One caveat that is easy to miss. The reviewer is shown one change per task. If two tasks ran into the same
+working copy without a commit between them, the second review sees both — mixed, and attributed to one task.
+Commit between tasks (`HH_COMMIT=1`), or give each task its own working copy.
 
 ## What the harness does not put its name on
 
@@ -221,6 +263,9 @@ main thing keeping a local model quick.
 - `subagent_stop` cannot block, so a subagent's claim cannot be checked against its transcript the way it can in
   the Claude Code harness. Delegation is left near-off for that reason.
 - A failed run leaves `status: in_progress`. That is deliberate: the tree should show that work was attempted.
+- The reviewer is a second opinion, not an oracle. It is a stronger model with no ability to write, reading the
+  same repository — it catches the things the worker overstated, and it will still miss what neither of them
+  thought to check. `verify: passed` means a reviewer with evidence said so, not that the work is correct.
 
 ## License
 

@@ -33,12 +33,14 @@ put() {
 }
 put "$SRC/tasks.py" "$HARNESS/tasks.py"
 put "$SRC/run.sh" "$HARNESS/run.sh"
+put "$SRC/review.sh" "$HARNESS/review.sh"
 for h in "$SRC"/hooks/*.py; do put "$h" "$HARNESS/hooks/$(basename "$h")"; done
-chmod +x "$HARNESS/run.sh"
+chmod +x "$HARNESS/run.sh" "$HARNESS/review.sh"
 for f in "$HARNESS/tasks.py" "$HARNESS"/hooks/*.py; do
   python3 -c "import ast,pathlib,sys; ast.parse(pathlib.Path(sys.argv[1]).read_text())" "$f"
 done
 bash -n "$HARNESS/run.sh"
+bash -n "$HARNESS/review.sh"
 
 echo "== config.yaml: merge"
 python3 - "$SRC/config.yaml" "$TARGET/config.yaml" "$TARGET" <<'PY'

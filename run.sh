@@ -242,6 +242,8 @@ PY
     what="the working tree changed, $touched path(s) differ from HEAD"
   fi
   echo "   $what -> review"
+  mkdir -p "$STATE/review"
+  printf 'worktree\n' > "$STATE/review/$name"
   note "$task" "harness: $what$(
       [ -n "$verify_cmd" ] && printf ', `%s` exited %s' "$verify_cmd" "$verify_rc"); handed to review"
   tasks set "$task" status review
@@ -261,6 +263,7 @@ PY
       ( cd "$WORKDIR" && git add -- . ":!$guard_root" ':!.hermes-notes' >/dev/null 2>&1 || true )
       if commit_out=$( cd "$WORKDIR" && git commit -m "$name: $(section "$task" GOAL | head -n 1)" 2>&1 ); then
         echo "   committed in $WORKDIR"
+        printf 'commit %s\n' "$( cd "$WORKDIR" && git rev-parse HEAD )" > "$STATE/review/$name"
       else
         echo "   NOT committed — the work is safe but uncommitted:"
         printf '%s\n' "$commit_out" | tail -n 4 | sed 's/^/     /'

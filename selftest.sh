@@ -143,7 +143,7 @@ check "the prompt forbids claiming completion"          "$(tp prompt "$T/10-a/01
 tp set "$T/10-a/01-first" status done >/dev/null
 check "status can be written"                           "$(cat "$T/10-a/01-first/labels.txt")" 'status: done'
 check "a met dependency releases the next task"         "$(tp next)" '10-a/02-second$'
-check "verify: is refused"                              "$(tp set "$T/10-a/01-first" verify passed)" 'not ours to write'
+check "verify: is refused"                              "$(tp set "$T/10-a/01-first" verify passed)" "not agent's to write"
 check "verify: is still pending"                        "$(cat "$T/10-a/01-first/labels.txt")" 'verify: pending'
 tp set "$T/10-a/02-second" status done >/dev/null
 [ -z "$(tp next)" ] && ok "next says nothing when the tree is closed" || bad "next says nothing when the tree is closed" "$(tp next)"
@@ -177,6 +177,40 @@ out=$(python3 "$H/tasks.py" --root "$TMP" prompt "$sfx" --notes /tmp/notes-here 
 check "the prompt names the notes directory"        "$out" '/tmp/notes-here/NOTES.md'
 check "the prompt says VERIFY is judged by a human" "$out" 'criteria a human'
 check "the prompt forbids recreating the tree"      "$out" 'Do not recreate it'
+
+echo "== review"
+rv="$TMP/rv"; mkdir -p "$rv"
+printf 'TASK: t\nGOAL\n  g\nOUTCOME\n  o\nVERIFY (architect)\n  1. a criterion\nROLE\n  AGENT\nDEPENDS\n  -\n' > "$rv/task.txt"
+printf 'priority: P0\nstatus: review\nverify: pending\nrole: AGENT\ndepends: none\n' > "$rv/labels.txt"
+check "depends: none is no dependency at all" "$(python3 "$H/tasks.py" --root "$TMP" list 2>&1)" 'review .*rv'
+out=$(python3 "$H/tasks.py" --root "$TMP" set "$rv" verify passed 2>&1); rcv=$?
+check "the agent may not write verify:" "$out" "not agent's to write"
+[ "$rcv" -ne 0 ] && ok "refusing to write verify: exits non-zero" || bad "refusing to write verify: exits non-zero" "exit 0"
+python3 "$H/tasks.py" --root "$TMP" set "$rv" verify passed --as reviewer >/dev/null 2>&1
+check "the reviewer may write verify:" "$(cat "$rv/labels.txt")" 'verify: passed'
+python3 "$H/tasks.py" --root "$TMP" set "$rv" status review --as reviewer >/dev/null 2>&1
+check "the review queue holds it" "$(python3 "$H/tasks.py" --root "$TMP" queue review 2>&1)" 'rv$'
+printf 'priority: P0\nstatus: review\nverify: pending\nrole: HUMAN\ndepends: -\n' > "$rv/labels.txt"
+empty "a HUMAN task is not queued for an automated review" \
+  "$(python3 "$H/tasks.py" --root "$TMP" queue review 2>/dev/null)"
+printf 'priority: P0\nstatus: review\nverify: pending\nrole: AGENT\ndepends: -\n' > "$rv/labels.txt"
+printf 'a diff line\n' > "$TMP/d.diff"
+out=$(python3 "$H/tasks.py" --root "$TMP" review-prompt "$rv" --diff "$TMP/d.diff" --test-command "pytest -q" 2>&1)
+check "the review prompt carries the change"          "$out" 'a diff line'
+check "the review prompt names the project check"     "$out" 'pytest -q'
+check "the review prompt refuses unsupported passes"  "$out" 'refused by the harness'
+check "the review prompt says notes are claims"       "$out" 'not evidence'
+printf '# Review — failed\n\nthe second argument is unchecked\n' > "$rv/REVIEW.md"
+check "a returned task carries its review into the next run" \
+  "$(python3 "$H/tasks.py" --root "$TMP" prompt "$rv" --notes /tmp/n 2>&1)" 'the second argument is unchecked'
+rvs=$(cat "$SRC/review.sh")
+check "the review runs with permissions that deny writes" "$rvs" 'permission-mode dontAsk'
+check "the review asks for a structured verdict"          "$rvs" 'json-schema'
+check "the review runs at the effort it was given"        "$rvs" 'effort_flag'
+check "the review never commits"                          "$(printf '%s' "$rvs" | grep -c 'git commit' || true)" '^0$'
+check "the review never bypasses permissions"             "$(printf '%s' "$rvs" | grep -c 'skip-permissions\|bypassPermissions' || true)" '^0$'
+check "one named task can be reviewed on its own"        "$rvs" 'HH_REVIEW_ONLY'
+check "a task outside review is refused by name"         "$rvs" 'not review'
 
 echo "== config"
 cfg=$(cat "$SRC/config.yaml")
