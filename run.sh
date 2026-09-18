@@ -20,6 +20,7 @@ command -v hermes >/dev/null 2>&1 || { echo "hermes is not on PATH" >&2; exit 1;
 [ -d "$ROOT" ] || { echo "no task tree at $ROOT" >&2; exit 1; }
 [ -f "$HARNESS/tasks.py" ] || { echo "harness not installed at $HARNESS (run install.sh)" >&2; exit 1; }
 mkdir -p "$LOGS" "$STATE/attempts"
+printf '*\n' > "$STATE/.gitignore"
 
 interrupted() {
   echo
