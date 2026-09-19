@@ -9,6 +9,10 @@ do the other's job, and the split is enforced, not requested.
 
 Built against hermes-agent `0.21.3` (tag `v2026.9.14`), read from the source rather than the README.
 
+Two working documents sit in `docs/`: [`model-serving.md`](docs/model-serving.md) — which model, which build,
+how to serve it on one 32 GB card and what to check afterwards; [`operating.md`](docs/operating.md) — what to set
+on this side of the socket, the order of a run, what each outcome means, and what not to do.
+
 ## The two gates
 
 Nothing else matters until both hold.
