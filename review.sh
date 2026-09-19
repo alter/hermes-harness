@@ -12,6 +12,7 @@ WORKDIR=$(cd "$WORKDIR" && pwd)
 MAX=${HH_REVIEW_MAX:-0}
 MAX_ROUNDS=${HH_REVIEW_MAX_ROUNDS:-2}
 MODEL=${HH_REVIEW_MODEL:-opus}
+FALLBACK=${HH_REVIEW_FALLBACK:-sonnet}
 EFFORT=${HH_REVIEW_EFFORT:-high}
 BUDGET=${HH_REVIEW_BUDGET:-5}
 TEST_CMD=${HH_TEST_COMMAND:-}
@@ -39,6 +40,10 @@ case "$help" in
   *--permission-prompts*) prompts_flag=(--permission-prompts none) ;;
   *) prompts_flag=() ;;
 esac
+fallback_flag=()
+case "$help" in
+  *--fallback-model*) [ -n "$FALLBACK" ] && fallback_flag=(--fallback-model "$FALLBACK") ;;
+esac
 
 LOCK="$STATE/review.lock"
 if ! ( set -o noclobber; printf '%s %s\n' "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$LOCK" ) 2>/dev/null; then
@@ -58,6 +63,19 @@ trap interrupted INT TERM
 tasks() { python3 "$HARNESS/tasks.py" --root "$ROOT" "$@"; }
 slug()  { printf '%s' "${1#$ROOT/}" | tr '/' '-'; }
 
+ledger() {
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" "$3" "$4" "$5" "${6:-}" \
+    >> "$STATE/ledger.tsv"
+}
+
+work_fingerprint() {
+  ( cd "$WORKDIR" || exit 0
+    { git diff HEAD -- . ':!.hermes-notes' 2>/dev/null
+      git ls-files -o --exclude-standard -- . ':!.hermes-notes' 2>/dev/null \
+        | while IFS= read -r f; do printf '%s ' "$f"; sha1sum "$f" 2>/dev/null | cut -d' ' -f1; echo; done
+    } | sha1sum | cut -d' ' -f1 ) || echo none
+}
+
 # What the writing loop left behind: a commit it made, or the uncommitted state
 # of the working tree. A new file is untracked, so `git diff HEAD` alone would
 # show the reviewer a change with its most important half missing.
@@ -66,6 +84,11 @@ capture_diff() {
   ref=$(cat "$STATE/review/$name" 2>/dev/null || echo worktree)
   ( cd "$WORKDIR"
     case "$ref" in
+      range\ *)
+        printf '# the change under review is the range %s\n\n' "${ref#range }"
+        git log --oneline "${ref#range }" 2>/dev/null
+        echo
+        git diff --stat --patch "${ref#range }" -- . ':!.hermes-notes' 2>/dev/null ;;
       commit\ *)
         printf '# the change under review is commit %s\n\n' "${ref#commit }"
         git show --stat --patch "${ref#commit }" -- . ':!.hermes-notes' 2>/dev/null ;;
@@ -93,6 +116,7 @@ baseline_ref() {
   local ref
   ref=$(cat "$STATE/review/$1" 2>/dev/null || echo worktree)
   case "$ref" in
+    range\ *)  printf '%s' "${ref#range }" | sed 's/\.\..*//' ;;
     commit\ *) printf '%s^' "${ref#commit }" ;;
     *) printf 'HEAD' ;;
   esac
@@ -191,9 +215,17 @@ while :; do
   if [ "$PREGATE" = "1" ] && [ -n "$TEST_CMD" ]; then
     ref=$(baseline_ref "$name")
     work_rc=0
-    echo "   the project's check first: $TEST_CMD"
-    run_check "$WORKDIR" "$check_out" || work_rc=$?
-    echo "   it exited $work_rc here"
+    if [ -f "$check_out" ] && [ -f "$LOGS/$name.check.fp" ] && [ -f "$LOGS/$name.check.rc" ] \
+       && [ "$(cat "$LOGS/$name.check.fp")" = "$(work_fingerprint)" ]; then
+      work_rc=$(cat "$LOGS/$name.check.rc")
+      echo "   the project's check was already run against this exact tree: exit $work_rc, reusing it"
+    else
+      echo "   the project's check first: $TEST_CMD"
+      run_check "$WORKDIR" "$check_out" || work_rc=$?
+      printf '%s' "$work_rc" > "$LOGS/$name.check.rc"
+      work_fingerprint > "$LOGS/$name.check.fp"
+      echo "   it exited $work_rc here"
+    fi
     baseline_check "$ref" "$LOGS/$name.baseline.out"
     if [ -z "$BASELINE_RC" ]; then
       echo "   no baseline to compare with, so the gate decides nothing"
@@ -234,11 +266,12 @@ while :; do
     if [ "$returns" -ge "$MAX_RETURNS" ]; then
       echo "   sent back $returns times -> blocked, a human has to look"
       tasks set "$task" status blocked --as reviewer
+      ledger "$name" gate review blocked "returned $returns times; last: $count new failure(s)"
     else
       tasks set "$task" status todo --as reviewer
+      ledger "$name" gate review todo "$count new failure(s) against $ref"
       rm -f "$STATE/attempts/$name" "$STATE/sessions/$name"
     fi
-    started=$started
     continue
   fi
 
@@ -257,7 +290,7 @@ while :; do
   tasks review-prompt "$task" --diff "$diff_file" --test-command "$TEST_CMD" --workdir "$WORKDIR" \
     "${check_arg[@]}" \
     | ( cd "$WORKDIR" && claude -p \
-        --model "$MODEL" "${effort_flag[@]}" \
+        --model "$MODEL" "${effort_flag[@]}" "${fallback_flag[@]}" \
         --permission-mode dontAsk "${prompts_flag[@]}" \
         --tools "Bash,Read,Grep,Glob" \
         --allowedTools "${allowed[@]}" \
@@ -274,14 +307,14 @@ while :; do
   outcome=$(python3 "$HARNESS/verdict.py" "$LOGS/$name.review.json" "$task" "$rc" "$TEST_CMD")
   read -r verdict denied usable <<<"$outcome"
 
-  echo "   verdict: $verdict (denied commands: $denied, usable: $usable)"
-  printf '   cost: %s\n' "$(python3 -c "
+  cost=$(python3 -c "
 import json,sys
 try:
-    envelope = json.load(open(sys.argv[1]))
-    print(f\"{envelope.get('total_cost_usd', 0):.2f} USD over {envelope.get('num_turns', 0)} turns\")
+    print(f\"{json.load(open(sys.argv[1])).get('total_cost_usd', 0):.2f}\")
 except Exception:
-    print('the envelope could not be read')" "$LOGS/$name.review.json")"
+    print('?')" "$LOGS/$name.review.json")
+  echo "   verdict: $verdict (denied commands: $denied, usable: $usable)"
+  echo "   cost: $cost USD"
 
   if [ "$usable" != "yes" ]; then
     rounds=$((rounds + 1))
@@ -289,7 +322,9 @@ except Exception:
     if [ "$rounds" -ge "$MAX_ROUNDS" ]; then
       echo "   $rounds unusable review(s) -> blocked, a human has to look"
       tasks set "$task" status blocked --as reviewer
+      ledger "$name" reviewer review blocked "$rounds unusable reviews" "$cost"
     else
+      ledger "$name" reviewer review review "unusable review" "$cost"
       echo "   the review could not be relied on; see $task/REVIEW.unusable.md"
     fi
     [ -s "$LOGS/$name.review.err" ] && tail -n 5 "$LOGS/$name.review.err" | sed 's/^/     /'
@@ -307,6 +342,7 @@ except Exception as exc:
     passed)
       tasks set "$task" verify passed --as reviewer
       tasks set "$task" status done --as reviewer
+      ledger "$name" reviewer review done "passed" "$cost"
       rm -f "$STATE/returns/$name"
       echo "   -> done"
       judged=$((judged + 1)) ;;
@@ -316,15 +352,18 @@ except Exception as exc:
       tasks set "$task" verify failed --as reviewer
       if [ "$returns" -ge "$MAX_RETURNS" ]; then
         tasks set "$task" status blocked --as reviewer
+        ledger "$name" reviewer review blocked "failed; returned $returns times" "$cost"
         echo "   -> sent back $returns times already; blocked, a human has to look"
       else
         tasks set "$task" status todo --as reviewer
+        ledger "$name" reviewer review todo "failed" "$cost"
         rm -f "$STATE/attempts/$name" "$STATE/sessions/$name"
         echo "   -> back to todo, with REVIEW.md for the next run to read"
       fi
       judged=$((judged + 1)) ;;
     blocked)
       tasks set "$task" status blocked --as reviewer
+      ledger "$name" reviewer review blocked "reviewer could not judge it" "$cost"
       echo "   -> blocked, a human has to settle it"
       judged=$((judged + 1)) ;;
   esac

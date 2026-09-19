@@ -43,7 +43,7 @@ If that last line prints nothing, stop and fix the server. Everything downstream
 
 ```bash
 pip install pyyaml
-./selftest.sh          # 142 checks on this checkout, installs nothing
+./selftest.sh          # 161 checks on this checkout, installs nothing
 ./install.sh           # merges into ~/.hermes/config.yaml, copies the harness to ~/.hermes/harness
 ./selftest.sh ~/.hermes
 ```
@@ -123,6 +123,13 @@ behind"; only the reviewer turns that into `done` / `verify: passed`, and the lo
 Only one loop may work a task tree at a time: the second is refused with the first one's pid, because two
 loops share the attempt counters, the status field and the log file names, and the mess that makes is not
 obvious while it is happening. A lock left by a dead process is taken over with a note.
+
+The worker gets `NOTES.md` as a form, not a blank page: one table row per `VERIFY` criterion to fill from
+something it ran or read, and `guard-notes.py` refuses to let it stop while a row still reads `(not checked)`.
+After an attempt that changed the tree, the loop runs `HH_TEST_COMMAND` itself and appends what it printed
+under "Measured by the harness", beside whatever the worker claimed; the reviewer reuses that measurement when
+the tree has not moved since. Every transition — worker, gate, reviewer — is one line in
+`.hermes-harness/ledger.tsv`, and `status.sh` reads it back.
 
 Knobs: `HH_MAX_TASKS` — how many tasks to **attempt** before stopping, 0 for until nothing is ready; `HH_MAX_ATTEMPTS` — how many runs one task gets before it is blocked (the counter lives in `.hermes-harness/attempts/` and is cleared when someone puts the task back to `todo`); `HH_RUN_VERIFY=0` to skip the check,
 `HH_PROFILE`, `HH_TASK_ROOT`, and `HH_WORKDIR` — the directory the agent works in, when it should not be the

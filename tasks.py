@@ -113,6 +113,41 @@ def section(body: str, name: str) -> str:
     return ""
 
 
+NOT_CHECKED = "(not checked)"
+WRITE_HERE = "(write here)"
+CRITERION_RE = re.compile(r"^\s*(?:[-*\u2022]|\d+[.)])\s+(.*\S)\s*$")
+
+
+def verify_criteria(body: str) -> list[str]:
+    found = [m.group(1) for line in section(body, "VERIFY").splitlines() if (m := CRITERION_RE.match(line))]
+    return found or ["OUTCOME holds, as stated in the task"]
+
+
+def build_scaffold(task_dir: pathlib.Path) -> str:
+    body = (task_dir / "task.txt").read_text(encoding="utf-8")
+    rows = "\n".join(f"| {c.replace('|', '/')} | {NOT_CHECKED} | {NOT_CHECKED} |" for c in verify_criteria(body))
+    return "\n".join([
+        "# NOTES",
+        "",
+        "## What I did",
+        "",
+        WRITE_HERE,
+        "",
+        "## VERIFY, criterion by criterion",
+        "",
+        "Every row is filled from something you ran or read. A row left as it is here is a row you did not check.",
+        "",
+        "| criterion | what I ran or read | what it showed |",
+        "| --- | --- | --- |",
+        rows,
+        "",
+        "## Not settled",
+        "",
+        WRITE_HERE,
+        "",
+    ])
+
+
 def build_prompt(root: pathlib.Path, task_dir: pathlib.Path, notes: str = "") -> str:
     body = (task_dir / "task.txt").read_text(encoding="utf-8")
     labels = read_labels(task_dir)
@@ -136,8 +171,10 @@ def build_prompt(root: pathlib.Path, task_dir: pathlib.Path, notes: str = "") ->
         "  under any name. Your code and artefacts go where the project already keeps that kind of file.",
         "- You never decide the task is finished and you never write status: or verify:. A reviewer does"
         "  that, from what you leave behind. Overstating what you did only makes the review fail.",
-        f"- Write your record to {notes_dir}/NOTES.md: what you did, what you measured, what you decided,"
-        "  and what you could not settle. The harness moves it into the task directory afterwards.",
+        f"- Your record is {notes_dir}/NOTES.md. It already exists, as a form: one table row per VERIFY"
+        f"  criterion, to be filled from what you ran or read, and two sections marked {WRITE_HERE}. Fill"
+        "  every row and both sections before you stop; a row left unfilled is read as unchecked. The"
+        "  harness moves the file into the task directory afterwards.",
         f"- If you cannot proceed, write {notes_dir}/BLOCKED.md with what is missing and what you tried,"
         "  then stop. Stopping honestly is a result; a workaround that hides the problem is not.",
         "",
@@ -272,6 +309,11 @@ def cmd_prompt(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_scaffold(args: argparse.Namespace) -> int:
+    print(build_scaffold(pathlib.Path(args.task).resolve()), end="")
+    return 0
+
+
 def cmd_queue(args: argparse.Namespace) -> int:
     root = pathlib.Path(args.root).resolve()
     found = queue(root, args.status)
@@ -307,6 +349,9 @@ def main() -> int:
     p.add_argument("task")
     p.add_argument("--notes", default="", help="where the agent should write NOTES.md and BLOCKED.md")
     p.set_defaults(func=cmd_prompt)
+    p = sub.add_parser("scaffold")
+    p.add_argument("task")
+    p.set_defaults(func=cmd_scaffold)
     p = sub.add_parser("queue")
     p.add_argument("status", nargs="?", default="review")
     p.set_defaults(func=cmd_queue)

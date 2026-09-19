@@ -304,6 +304,34 @@ JSON
 check "a supported pass is usable" "$(verdict_of 0 'python3 -m pytest -q')" '^passed 0 yes$'
 empty "a usable review clears the unusable one" "$(cat "$vd/REVIEW.unusable.md" 2>/dev/null)"
 
+echo "== notes form"
+sc=$(python3 "$H/tasks.py" --root "$TMP" scaffold "$rv" 2>&1)
+check "the form has one row per VERIFY criterion" "$(printf '%s' "$sc" | grep -c '(not checked) | (not checked)')" '^1$'
+check "the form names the criterion"              "$sc" 'a criterion'
+check "the form has the two prose sections"       "$(printf '%s' "$sc" | grep -c '(write here)')" '^2$'
+nf="$TMP/nf"; mkdir -p "$nf"
+printf '%s\n' "$sc" > "$nf/NOTES.md"
+gnf() { printf '%s' "$2" | HH_NOTES_FILE="$nf/NOTES.md" python3 "$H/hooks/guard-notes.py" 2>/dev/null; }
+check "an untouched form is refused even though it is long" \
+  "$(gnf x '{"extra":{"changed_paths":["a.py"],"attempt":1}}')" 'still unfilled'
+check "the refusal names the unchecked criterion" \
+  "$(gnf x '{"extra":{"changed_paths":["a.py"]}}')" 'a criterion'
+sed -i 's/| (not checked) | (not checked) |/| ran pytest -q | 3 passed |/; s/(write here)/did the thing, nothing left open/' "$nf/NOTES.md"
+empty "a filled form is accepted" "$(gnf x '{"extra":{"changed_paths":["a.py"]}}')"
+rs=$(cat "$SRC/run.sh")
+check "the writing loop lays out the form before the run" "$rs" 'tasks scaffold'
+check "an untouched form does not count as notes"        "$rs" 'cmp -s .*\.scaffold'
+check "the writing loop measures the project check itself" "$rs" 'Measured by the harness'
+check "the measurement is kept for the reviewer to reuse"  "$rs" 'check\.fp'
+check "every transition is written to the ledger"          "$(printf '%s' "$rs" | grep -c '^ *ledger ')" '^[6-9]$|^[1-9][0-9]$'
+check "the reviewer reuses a measurement of the same tree" "$rvs" 'reusing it'
+check "a range of commits can be the change under review" "$rvs" 'range\\ \*'
+check "the reviewer has a fallback model"                  "$rvs" 'fallback-model'
+check "the reviewer writes the ledger too"                 "$(printf '%s' "$rvs" | grep -c '^ *ledger ')" '^[5-9]$|^[1-9][0-9]$'
+st=$(cd "$TMP" && HH_HOME="$H" HH_TASK_ROOT="$TMP" bash "$SRC/status.sh" "$TMP" 2>&1 || true)
+check "status.sh reads a tree with no ledger yet" "$st" '== tree'
+check "status.sh counts by status"                "$st" 'review'
+
 echo "== config"
 cfg=$(cat "$SRC/config.yaml")
 check "approvals are off"              "$cfg" 'mode: "off"'

@@ -14,6 +14,8 @@ MAX_TASKS=${HH_MAX_TASKS:-0}
 MAX_ATTEMPTS=${HH_MAX_ATTEMPTS:-3}
 RUN_VERIFY=${HH_RUN_VERIFY:-1}
 COMMIT=${HH_COMMIT:-1}
+TEST_CMD=${HH_TEST_COMMAND:-}
+MEASURE=${HH_MEASURE:-1}
 STATE="$PROJECT/.hermes-harness"
 LOGS="$STATE/logs"
 
@@ -100,6 +102,47 @@ note() {
   printf '\n- %s %s\n' "$(date -u +%Y-%m-%dT%H:%MZ)" "$*" >> "$task/NOTES.md"
 }
 
+status_of() {
+  python3 - "$1" <<'PY'
+import pathlib, sys
+for line in pathlib.Path(sys.argv[1], "labels.txt").read_text(encoding="utf-8").splitlines():
+    if line.split(":", 1)[0].strip() == "status":
+        print(line.split(":", 1)[1].strip()); break
+PY
+}
+
+# One line per transition, for the question "why is this task where it is":
+# time, task, who moved it, from, to, why, and what it cost when something did.
+ledger() {
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" "$3" "$4" "$5" "${6:-}" \
+    >> "$STATE/ledger.tsv"
+}
+
+# The worker's claims and the harness's measurement, side by side in the same
+# file. A note that says "2 failed" above and "did not run it" below is only
+# possible when nobody measures.
+measure() {
+  local task=$1 name=$2 attempt=$3 rc=0
+  [ "$MEASURE" = "1" ] && [ -n "$TEST_CMD" ] || return 0
+  echo "   measuring: $TEST_CMD"
+  ( cd "$WORKDIR" && eval "$TEST_CMD" ) > "$LOGS/$name.check.out" 2>&1 || rc=$?
+  printf '%s' "$rc" > "$LOGS/$name.check.rc"
+  work_fingerprint > "$LOGS/$name.check.fp"
+  echo "   it exited $rc"
+  {
+    printf '\n## Measured by the harness (attempt %s)\n\n' "$attempt"
+    printf '`%s` in %s, exit %s.\n\n' "$TEST_CMD" "$WORKDIR" "$rc"
+    if grep -qE '^(FAILED|ERROR) ' "$LOGS/$name.check.out"; then
+      printf 'Failure lines:\n\n```\n'
+      grep -E '^(FAILED|ERROR) ' "$LOGS/$name.check.out" | head -n 40
+      printf '```\n\n'
+    fi
+    printf 'Last lines:\n\n```\n'
+    tail -n 15 "$LOGS/$name.check.out"
+    printf '```\n'
+  } >> "$task/NOTES.md"
+}
+
 finished=0
 started=0
 while :; do
@@ -112,13 +155,8 @@ while :; do
   attempts_file="$STATE/attempts/$name"
   attempts=$(cat "$attempts_file" 2>/dev/null || echo 0)
 
-  if [ "$(python3 - "$task" <<'PY'
-import pathlib, sys
-for line in pathlib.Path(sys.argv[1], "labels.txt").read_text(encoding="utf-8").splitlines():
-    if line.split(":", 1)[0].strip() == "status":
-        print(line.split(":", 1)[1].strip()); break
-PY
-)" = "todo" ] && [ "$attempts" -gt 0 ]; then
+  was=$(status_of "$task")
+  if [ "$was" = "todo" ] && [ "$attempts" -gt 0 ]; then
     echo "== $name: status was reset to todo, so the attempt counter goes with it"
     rm -f "$attempts_file" "$STATE/sessions/$name"
     attempts=0
@@ -131,6 +169,7 @@ PY
     [ -f "$task/BLOCKED.md" ] || printf '# Blocked\n\nStopped after %s attempts with no artefact and no passing check.\nSee NOTES.md and %s.\n' \
       "$attempts" "$LOGS/$name.ndjson" > "$task/BLOCKED.md"
     tasks set "$task" status blocked
+    ledger "$name" worker "$was" blocked "$attempts attempts without progress"
     continue
   fi
 
@@ -140,6 +179,7 @@ PY
     echo "   the previous BLOCKED.md is kept as BLOCKED.previous.md"
   fi
   tasks set "$task" status in_progress
+  ledger "$name" worker "$was" in_progress "attempt $((attempts + 1))"
   printf '%s' "$((attempts + 1))" > "$attempts_file"
 
   session_file="$STATE/sessions/$name"
@@ -148,6 +188,8 @@ PY
   export HH_NOTES_FILE="$notes_dir/NOTES.md"
   rm -rf "$notes_dir" 2>/dev/null || true
   mkdir -p "$notes_dir"
+  tasks scaffold "$task" > "$notes_dir/NOTES.md"
+  cp "$notes_dir/NOTES.md" "$notes_dir/.scaffold"
 
   before=$(work_fingerprint)
   if [ -n "$resume_id" ]; then
@@ -162,8 +204,8 @@ PY
       "You stopped in the middle of this task: your last turn ended with prose instead of an action." \
       "Pick up exactly where you left off — the work you already did is still there." \
       "" \
-      "Before you stop this time, write $notes_dir/NOTES.md: what you did, what you measured," \
-      "what you decided, and what you could not settle. A run that leaves no record does not count," \
+      "Before you stop this time, fill in $notes_dir/NOTES.md — it is a form: one row per VERIFY criterion," \
+      "from what you ran or read, and two sections to write. A row left unfilled is read as unchecked," \
       "and \"there was nothing left to do\" is itself a finding worth writing down." \
       "If something blocks you, write $notes_dir/BLOCKED.md instead and stop." \
       | ( cd "$WORKDIR" && hermes ${PROFILE:+-p "$PROFILE"} chat --resume "$resume_id" \
@@ -194,8 +236,12 @@ PY
   [ -n "$new_session" ] && printf '%s' "$new_session" > "$session_file"
   after=$(work_fingerprint)
 
-  [ -s "$notes_dir/NOTES.md" ] && { printf '\n## %s (attempt %s)\n\n' "$(date -u +%Y-%m-%dT%H:%MZ)" \
-      "$((attempts + 1))" >> "$task/NOTES.md"; cat "$notes_dir/NOTES.md" >> "$task/NOTES.md"; }
+  notes_written=0
+  if [ -s "$notes_dir/NOTES.md" ] && ! cmp -s "$notes_dir/NOTES.md" "$notes_dir/.scaffold"; then
+    notes_written=1
+    printf '\n## %s (attempt %s)\n\n' "$(date -u +%Y-%m-%dT%H:%MZ)" "$((attempts + 1))" >> "$task/NOTES.md"
+    cat "$notes_dir/NOTES.md" >> "$task/NOTES.md"
+  fi
   [ -s "$notes_dir/BLOCKED.md" ] && cp "$notes_dir/BLOCKED.md" "$task/BLOCKED.md"
 
   verify_cmd=$(verify_command "$task")
@@ -211,6 +257,7 @@ PY
   if [ -s "$notes_dir/BLOCKED.md" ]; then
     echo "   the agent says it is blocked"
     tasks set "$task" status blocked
+    ledger "$name" worker in_progress blocked "agent wrote BLOCKED.md"
     rm -f "$session_file"
     note "$task" "harness: agent wrote BLOCKED.md, exit $rc"
     continue
@@ -219,19 +266,22 @@ PY
   if [ "$rc" -eq 130 ] || [ "$rc" -eq 143 ]; then
     printf '%s' "$attempts" > "$attempts_file"
     echo "   the run was interrupted (exit $rc); the attempt does not count"
+    ledger "$name" worker in_progress in_progress "interrupted, exit $rc"
     note "$task" "harness: run interrupted (exit $rc) before it could finish"
     interrupted
   fi
 
   if [ "$rc" -ne 0 ]; then
     echo "   hermes exited $rc -> stays open"
+    ledger "$name" worker in_progress in_progress "hermes exited $rc"
     note "$task" "harness: hermes exited $rc; log $LOGS/$name.ndjson"
     continue
   fi
 
-  if [ "$after" = "$before" ] && [ ! -s "$notes_dir/NOTES.md" ]; then
-    echo "   the working tree is byte-for-byte what it was, and no notes were written -> stays open"
-    note "$task" "harness: run exited 0 but left the working tree unchanged and wrote no notes; log $LOGS/$name.ndjson"
+  if [ "$after" = "$before" ] && [ "$notes_written" = "0" ]; then
+    echo "   the working tree is byte-for-byte what it was, and the notes form was left untouched -> stays open"
+    ledger "$name" worker in_progress in_progress "no change, no notes"
+    note "$task" "harness: run exited 0 but left the working tree unchanged and the notes form untouched; log $LOGS/$name.ndjson"
     continue
   fi
 
@@ -241,12 +291,14 @@ PY
   else
     what="the working tree changed, $touched path(s) differ from HEAD"
   fi
+  [ "$after" != "$before" ] && measure "$task" "$name" "$((attempts + 1))" || true
   echo "   $what -> review"
   mkdir -p "$STATE/review"
   printf 'worktree\n' > "$STATE/review/$name"
   note "$task" "harness: $what$(
       [ -n "$verify_cmd" ] && printf ', `%s` exited %s' "$verify_cmd" "$verify_rc"); handed to review"
   tasks set "$task" status review
+  ledger "$name" worker in_progress review "$what"
   rm -f "$attempts_file" "$session_file"
   finished=$((finished + 1))
 
