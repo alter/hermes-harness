@@ -506,3 +506,26 @@ commit 6f39eebc2fca48836d3010505162c1a6ca5d7455
 ```
 
 Все три подтверждены.
+
+# R6. Уровень размышлений по фактическому запросу
+
+Последовательно на одном сервере (`:8080`), без второго порта и без правки `hooks` — по прямому указанию человека.
+
+1. Остановлен рабочий `llama-server` (pid 431577 на тот момент), перезапущен той же командной строкой (раздел 1) плюс `--verbose`.
+2. Один запрос настоящего Hermes, новая сессия, не resume:
+
+```bash
+echo "Say hello in one word." | hermes chat -Q --format stream-json --query-file - --accept-hooks
+```
+
+Ответ пришёл нормально (`exit_code: 0`, `session_id: 20260921_201241_fb9541`).
+
+3. В журнале сервера за этот запрос строки с буквальным ключом `"reasoning_effort"` не найдено ни разу — на этом уровне verbosity `llama-server` не печатает входящее JSON-тело запроса как отдельные поля, только внутренние сэмплинг-параметры (`temperature`, `top_k`, ...). Значение уровня размышлений в запрос не приходит отдельным полем — оно вшито в отрендеренный текст промпта самим Jinja-шаблоном. Найдено это в дампе `"prompt":"..."` за тот же запрос:
+
+```
+"prompt":"<|im_start|>system\nReasoning effort is set to xhigh. Please think carefully through the task, validate key assumptions, consider plausible alternatives, and prioritize correctness, consistency, and clarity in the final answer.\n\n...
+```
+
+Дословно: `Reasoning effort is set to xhigh.` — подтверждено, что установленная копия реально отправляет в рендеренном промпте `xhigh`, а не что-то другое и не пусто.
+
+4. `llama-server` остановлен и перезапущен ещё раз исходной командной строкой, без `--verbose` (итоговый pid — 431577). Один процесс на `:8080` подтверждён после каждого из двух перезапусков (`pgrep -c llama-server` → `1`, `curl -s http://127.0.0.1:8080/health` → `{"status":"ok"}`).
