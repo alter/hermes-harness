@@ -318,6 +318,13 @@ PY
     continue
   fi
 
+  if ! missing=$(tasks notes-check "$notes_dir/NOTES.md"); then
+    echo "   the notes form is unfilled -> stays open"
+    ledger "$name" worker in_progress in_progress "notes form unfilled"
+    note "$task" "harness: the run ended with the notes form unfilled: $(printf '%s' "$missing" | tr '\n' ';')"
+    continue
+  fi
+
   touched=$(changed_files)
   if [ -n "$before" ] && [ "$after" = "$before" ]; then
     what="the working tree is unchanged, but notes were written"

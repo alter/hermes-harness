@@ -415,8 +415,16 @@ check "an untouched form is refused even though it is long" \
   "$(gnf x '{"extra":{"changed_paths":["a.py"],"attempt":1}}')" 'still unfilled'
 check "the refusal names the unchecked criterion" \
   "$(gnf x '{"extra":{"changed_paths":["a.py"]}}')" 'a criterion'
+nc() { python3 "$H/tasks.py" notes-check "$1" 2>&1; }
+out=$(nc "$nf/NOTES.md"); ncrc=$?
+check "notes-check on the unfilled scaffold names a row"  "$out" 'a criterion'
+check "and exits 1"                                        "$ncrc" '^1$'
+check "notes-check on a missing file exits 1"               "$(nc "$nf/no-such-file.md"; echo $?)" '1$'
 sed -i.bak 's/| (not checked) | (not checked) |/| ran pytest -q | 3 passed |/; s/(write here)/did the thing, nothing left open/' "$nf/NOTES.md"
 empty "a filled form is accepted" "$(gnf x '{"extra":{"changed_paths":["a.py"]}}')"
+out=$(nc "$nf/NOTES.md"); ncrc=$?
+check "notes-check on a filled form exits 0"                 "$ncrc" '^0$'
+empty "and prints nothing"                                   "$out"
 rs=$(cat "$SRC/run.sh")
 check "the writing loop lays out the form before the run" "$rs" 'tasks scaffold'
 check "an untouched form does not count as notes"        "$rs" 'cmp -s .*\.scaffold'
@@ -623,6 +631,11 @@ printf '%s\n' "$foreign_pid" > "$P/.hermes-harness/workdir.busy"
 loop_review "$P" >/dev/null 2>&1 || true
 check "a busy marker held by a live process that is not this run is left alone" "$(cat "$P/.hermes-harness/workdir.busy" 2>/dev/null)" "^$foreign_pid\$"
 kill "$foreign_pid" 2>/dev/null; wait "$foreign_pid" 2>/dev/null
+
+P="$LP/p-unfilled"; new_project "$P"
+STUB_HERMES_DO='echo 2 > code.txt' loop_run "$P" >/dev/null
+check "changed code with an unfilled form is not handed to review" "$(label "$P" status)" '^in_progress$'
+check "the notes say which rows are missing" "$(cat "$P/tasks/10-a/01-x/NOTES.md")" 'unfilled'
 
 echo "== config"
 cfg=$(cat "$SRC/config.yaml")

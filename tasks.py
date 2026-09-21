@@ -155,6 +155,17 @@ def build_scaffold(task_dir: pathlib.Path) -> str:
     ])
 
 
+def unfilled_rows(text: str) -> list[str]:
+    rows = []
+    for line in text.splitlines():
+        if NOT_CHECKED in line and line.lstrip().startswith("|"):
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            rows.append(cells[0] if cells else line.strip())
+    if WRITE_HERE in text:
+        rows.append("a section still reading " + WRITE_HERE)
+    return rows
+
+
 def build_prompt(root: pathlib.Path, task_dir: pathlib.Path, notes: str = "") -> str:
     body = (task_dir / "task.txt").read_text(encoding="utf-8")
     labels = read_labels(task_dir)
@@ -321,6 +332,16 @@ def cmd_scaffold(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_notes_check(args: argparse.Namespace) -> int:
+    path = pathlib.Path(args.file)
+    if not path.is_file():
+        return 1
+    missing = unfilled_rows(path.read_text(encoding="utf-8"))
+    for row in missing:
+        print(row)
+    return 1 if missing else 0
+
+
 def cmd_queue(args: argparse.Namespace) -> int:
     root = pathlib.Path(args.root).resolve()
     found = queue(root, args.status)
@@ -359,6 +380,9 @@ def main() -> int:
     p = sub.add_parser("scaffold")
     p.add_argument("task")
     p.set_defaults(func=cmd_scaffold)
+    p = sub.add_parser("notes-check")
+    p.add_argument("file")
+    p.set_defaults(func=cmd_notes_check)
     p = sub.add_parser("queue")
     p.add_argument("status", nargs="?", default="review")
     p.set_defaults(func=cmd_queue)
