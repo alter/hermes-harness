@@ -8,6 +8,7 @@ import sys
 
 READY_STATUSES = {"todo", "in_progress"}
 WRITABLE_LABELS = {"agent": {"status"}, "reviewer": {"status", "verify"}}
+AGENT_STATUSES = {"todo", "in_progress", "review", "blocked"}
 NO_DEPENDS = {"-", "none", "нет", "n/a", "na"}
 PRIORITY_ORDER = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
 SECTION_RE = re.compile(r"^(TASK:|GOAL|CONTEXT|SCOPE|OUTCOME|VERIFY|ROLE|DEPENDS)\b.*$", re.M)
@@ -32,6 +33,8 @@ def write_label(task_dir: pathlib.Path, key: str, value: str, role: str = "agent
         raise ValueError(f"no such role: {role}; known roles are {sorted(WRITABLE_LABELS)}")
     if key not in allowed:
         raise ValueError(f"{key} is not {role}'s to write: that role owns only {sorted(allowed)}")
+    if role == "agent" and key == "status" and value not in AGENT_STATUSES:
+        raise ValueError(f"status: {value} is the reviewer's to write, not the agent's")
     path = task_dir / "labels.txt"
     lines = path.read_text(encoding="utf-8").splitlines()
     replaced = False
@@ -59,9 +62,13 @@ def depends_met(root: pathlib.Path, labels: dict[str, str]) -> tuple[bool, str]:
         dep_dir = root / dep
         if not dep_dir.is_dir():
             return False, f"depends points nowhere: {dep}"
-        dep_status = read_labels(dep_dir).get("status", "")
+        dep_labels = read_labels(dep_dir)
+        dep_status = dep_labels.get("status", "")
         if dep_status != "done":
             return False, f"depends {dep} is {dep_status or 'unlabelled'}, not done"
+        dep_verify = dep_labels.get("verify", "")
+        if dep_verify != "passed":
+            return False, f"depends {dep} is done but verify is {dep_verify or 'unset'}, not passed"
     return True, ""
 
 

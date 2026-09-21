@@ -143,22 +143,32 @@ check "list explains an unmet dependency"               "$(tp list)" 'depends 10
 check "the prompt carries the task body"                "$(tp prompt "$T/10-a/01-first")" 'GOAL'
 check "the prompt states the tree is not the agent's"   "$(tp prompt "$T/10-a/01-first")" 'not in your working directory and is not yours to write'
 check "the prompt forbids claiming completion"          "$(tp prompt "$T/10-a/01-first")" 'never write status: or verify:'
-tp set "$T/10-a/01-first" status done >/dev/null
+tp set "$T/10-a/01-first" status done --as reviewer >/dev/null
 check "status can be written"                           "$(cat "$T/10-a/01-first/labels.txt")" 'status: done'
-check "a met dependency releases the next task"         "$(tp next)" '10-a/02-second$'
+check "done without a passed verify releases nothing" "$(tp list)" 'is done but verify is pending'
+check "the agent may not write status: done" "$(tp set "$T/10-a/02-second" status done)" "reviewer's to write"
 check "verify: is refused"                              "$(tp set "$T/10-a/01-first" verify passed)" "not agent's to write"
 check "verify: is still pending"                        "$(cat "$T/10-a/01-first/labels.txt")" 'verify: pending'
-tp set "$T/10-a/02-second" status done >/dev/null
+tp set "$T/10-a/01-first" verify passed --as reviewer >/dev/null
+check "a met dependency releases the next task"         "$(tp next)" '10-a/02-second$'
+tp set "$T/10-a/02-second" status done --as reviewer >/dev/null
 [ -z "$(tp next)" ] && ok "next says nothing when the tree is closed" || bad "next says nothing when the tree is closed" "$(tp next)"
 
 mkdir -p "$T/30-c/01-multi"
 mk "$T/30-c/01-multi" "multi" "src/c.py" "true" "AGENT" "10-a/01-first, 20-b/01-human"
 printf 'phase: c\nrole: AGENT\ntype: feature\npriority: P0\nstatus: todo\nverify: pending\nmilestone: M1\ndepends: 10-a/01-first, 20-b/01-human\n' > "$T/30-c/01-multi/labels.txt"
 check "a comma-separated depends waits on the unmet one" "$(tp list)" 'depends 20-b/01-human is todo'
-tp set "$T/20-b/01-human" status done >/dev/null
+tp set "$T/20-b/01-human" status done --as reviewer >/dev/null
+tp set "$T/20-b/01-human" verify passed --as reviewer >/dev/null
 check "it becomes ready when every dependency is done" "$(tp list)" 'ready .*30-c/01-multi'
 printf 'phase: c\nrole: AGENT\ntype: feature\npriority: P0\nstatus: todo\nverify: pending\nmilestone: M1\ndepends: -\n' > "$T/30-c/01-multi/labels.txt"
 check "a dash means no dependency" "$(tp list)" 'ready .*30-c/01-multi'
+
+mkdir -p "$T/40-d/01-disagree"
+mk "$T/40-d/01-disagree" "disagree" "src/d.py" "true" "AGENT"
+printf 'phase: d\nrole: AGENT\ntype: feature\npriority: P0\nstatus: done\nverify: pending\nmilestone: M1\n' > "$T/40-d/01-disagree/labels.txt"
+tst=$(cd "$T" && HH_HOME="$H" HH_TASK_ROOT="$T" bash "$SRC/status.sh" "$T" 2>&1 || true)
+check "status.sh flags a done task whose verify was never passed" "$tst" 'done without verify: passed'
 
 sfx="$TMP/suffix"; mkdir -p "$sfx"
 printf 'TASK: t\nGOAL\n  g\nCONTEXT\n  -\nSCOPE\n  + a\n  \xe2\x88\x92 b\nOUTCOME\n  prose, no path at all\nVERIFY (architect / verifier)\n  1. a criterion a human judges\nROLE\n  AGENT\nDEPENDS\n  -\n' > "$sfx/task.txt"

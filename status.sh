@@ -37,6 +37,14 @@ for status, count in sorted(by_status.items()):
         print(f"   {status:<12}{count}")
 print(f"   ready       {len(ready)}" + (f"   next: {ready[0][1]}" if ready else ""))
 
+disagreeing = [str(d.relative_to(root)) for d in tasks.task_dirs(root)
+               if (lbl := tasks.read_labels(d)).get("status") == "done" and lbl.get("verify") != "passed"]
+if disagreeing:
+    print()
+    print("== labels that disagree")
+    for rel in disagreeing:
+        print(f"   done without verify: passed   {rel}")
+
 rows = []
 if ledger_path.exists():
     for line in ledger_path.read_text(encoding="utf-8").splitlines():
