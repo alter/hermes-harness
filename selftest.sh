@@ -614,6 +614,16 @@ out=$(HH_BUSY_WAIT=1 STUB_HERMES_DO="$FILL" loop_run "$P"); lrc=$?
 check "the writing loop waits for a review of the same copy, then gives up" "$lrc" '^75$'
 check "without touching the task"                                           "$(label "$P" status)" '^todo$'
 
+# drop_review_dir() runs at the top of every review.sh iteration, including one
+# with nothing to review; it must not wipe a busy marker some other, still-live
+# process owns just because it happens to see the file.
+sleep 30 & foreign_pid=$!
+P="$LP/p-not-my-marker"; new_project "$P"; mkdir -p "$P/.hermes-harness"
+printf '%s\n' "$foreign_pid" > "$P/.hermes-harness/workdir.busy"
+loop_review "$P" >/dev/null 2>&1 || true
+check "a busy marker held by a live process that is not this run is left alone" "$(cat "$P/.hermes-harness/workdir.busy" 2>/dev/null)" "^$foreign_pid\$"
+kill "$foreign_pid" 2>/dev/null; wait "$foreign_pid" 2>/dev/null
+
 echo "== config"
 cfg=$(cat "$SRC/config.yaml")
 check "approvals are off"              "$cfg" 'mode: "off"'

@@ -61,7 +61,8 @@ review_dir=""
 drop_review_dir() {
   [ -n "$review_dir" ] && ( cd "$WORKDIR" && git worktree remove --force "$review_dir" ) >/dev/null 2>&1
   review_dir=""
-  rm -f "$STATE/workdir.busy"
+  [ "$(cat "$STATE/workdir.busy" 2>/dev/null)" = "$$" ] && rm -f "$STATE/workdir.busy"
+  true
 }
 
 release_lock() { [ "$(cut -d' ' -f1 "$LOCK" 2>/dev/null)" = "$$" ] && rm -f "$LOCK"; drop_review_dir; }
