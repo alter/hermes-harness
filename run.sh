@@ -309,12 +309,6 @@ PY
   echo "   $what -> review"
   mkdir -p "$STATE/review"
   printf 'worktree\n' > "$STATE/review/$name"
-  note "$task" "harness: $what$(
-      [ -n "$verify_cmd" ] && printf ', `%s` exited %s' "$verify_cmd" "$verify_rc"); handed to review"
-  tasks set "$task" status review
-  ledger "$name" worker in_progress review "$what"
-  rm -f "$attempts_file" "$session_file"
-  finished=$((finished + 1))
 
   # The commit is the owner's, made with the repository's own identity. Stamping
   # the tool into the author field announces what made the change to everyone who
@@ -340,7 +334,13 @@ PY
       fi
     fi
   fi
-  rm -f "$own_file"
+
+  note "$task" "harness: $what$(
+      [ -n "$verify_cmd" ] && printf ', `%s` exited %s' "$verify_cmd" "$verify_rc"); handed to review"
+  tasks set "$task" status review
+  ledger "$name" worker in_progress review "$what"
+  rm -f "$attempts_file" "$session_file" "$own_file"
+  finished=$((finished + 1))
 
 done
 

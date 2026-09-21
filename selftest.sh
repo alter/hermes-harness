@@ -583,6 +583,12 @@ STUB_HERMES_DO="$FILL" loop_run "$P" >/dev/null
 check "the task's own work is committed"            "$(cd "$P" && git show --name-only --format= HEAD)" 'code.txt'
 check "a task file staged beforehand is left out"   "$(cd "$P" && git show --name-only --format= HEAD | grep -c '^tasks/' || true)" '^0$'
 
+P="$LP/p-order"; new_project "$P"; mkdir -p "$P/.git/hooks"
+printf '#!/bin/sh\ngrep "^status:" "%s/tasks/10-a/01-x/labels.txt" > "%s/status-at-commit"\n' "$P" "$LP" > "$P/.git/hooks/pre-commit"
+chmod +x "$P/.git/hooks/pre-commit"
+STUB_HERMES_DO="$FILL" loop_run "$P" >/dev/null
+check "a task is not offered for review before its commit exists" "$(cat "$LP/status-at-commit")" 'in_progress'
+
 echo "== config"
 cfg=$(cat "$SRC/config.yaml")
 check "approvals are off"              "$cfg" 'mode: "off"'
