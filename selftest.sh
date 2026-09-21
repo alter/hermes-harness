@@ -316,7 +316,7 @@ check "an untouched form is refused even though it is long" \
   "$(gnf x '{"extra":{"changed_paths":["a.py"],"attempt":1}}')" 'still unfilled'
 check "the refusal names the unchecked criterion" \
   "$(gnf x '{"extra":{"changed_paths":["a.py"]}}')" 'a criterion'
-sed -i 's/| (not checked) | (not checked) |/| ran pytest -q | 3 passed |/; s/(write here)/did the thing, nothing left open/' "$nf/NOTES.md"
+sed -i.bak 's/| (not checked) | (not checked) |/| ran pytest -q | 3 passed |/; s/(write here)/did the thing, nothing left open/' "$nf/NOTES.md"
 empty "a filled form is accepted" "$(gnf x '{"extra":{"changed_paths":["a.py"]}}')"
 rs=$(cat "$SRC/run.sh")
 check "the writing loop lays out the form before the run" "$rs" 'tasks scaffold'
