@@ -5,6 +5,7 @@ model:
   base_url: http://127.0.0.1:8080/v1
   api_key: ""
   context_length: 131072
+  reasoning_echo: true
 
 toolsets:
   - coding
