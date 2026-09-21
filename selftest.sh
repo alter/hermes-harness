@@ -589,6 +589,17 @@ chmod +x "$P/.git/hooks/pre-commit"
 STUB_HERMES_DO="$FILL" loop_run "$P" >/dev/null
 check "a task is not offered for review before its commit exists" "$(cat "$LP/status-at-commit")" 'in_progress'
 
+# See review_file(): the log file's own base name may be the long slug too.
+log_base() { basename "$(ls "$1"/.hermes-harness/logs/*.ndjson | head -n 1)" .ndjson; }
+
+P="$LP/p-isolated"; new_project "$P"
+STUB_HERMES_DO="$FILL" loop_run "$P" >/dev/null
+( cd "$P" && echo BROKEN-BY-A-LATER-TASK > code.txt && git commit -qam later )
+STUB_CLAUDE_DO="cat code.txt > $LP/seen.txt" STUB_CLAUDE_REPLY="$PASS" HH_TEST_COMMAND='cat code.txt' loop_review "$P" >/dev/null
+check "the reviewer stands in the commit under review"  "$(cat "$LP/seen.txt")" '^2$'
+check "the project's check ran there too"               "$(cat "$P/.hermes-harness/logs/$(log_base "$P").check.out")" '^2$'
+check "the temporary copy is gone afterwards"           "$(cd "$P" && git worktree list | wc -l | tr -d ' ')" '^1$'
+
 echo "== config"
 cfg=$(cat "$SRC/config.yaml")
 check "approvals are off"              "$cfg" 'mode: "off"'

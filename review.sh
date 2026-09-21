@@ -57,9 +57,15 @@ if ! ( set -o noclobber; printf '%s %s\n' "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" 
   echo "note: a stale review lock from pid ${holder:-unknown} is being taken over"
   printf '%s %s\n' "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$LOCK"
 fi
-release_lock() { [ "$(cut -d' ' -f1 "$LOCK" 2>/dev/null)" = "$$" ] && rm -f "$LOCK"; }
+review_dir=""
+drop_review_dir() {
+  [ -n "$review_dir" ] && ( cd "$WORKDIR" && git worktree remove --force "$review_dir" ) >/dev/null 2>&1
+  review_dir=""
+}
+
+release_lock() { [ "$(cut -d' ' -f1 "$LOCK" 2>/dev/null)" = "$$" ] && rm -f "$LOCK"; drop_review_dir; }
 trap release_lock EXIT
-interrupted() { echo; echo "== interrupted: the task under review keeps its status"; release_lock; exit 130; }
+interrupted() { echo; echo "== interrupted: the task under review keeps its status"; drop_review_dir; release_lock; exit 130; }
 trap interrupted INT TERM
 
 tasks() { python3 "$HARNESS/tasks.py" --root "$ROOT" "$@"; }
@@ -105,16 +111,16 @@ next_in_queue() {
 
 guard_root=${HH_PROTECTED_ROOT:-$(basename "$ROOT")}
 
-snapshot_id() { python3 "$HARNESS/snapshot.py" "$WORKDIR" "$guard_root" 2>/dev/null || true; }
+snapshot_id() { python3 "$HARNESS/snapshot.py" "${1:-$WORKDIR}" "$guard_root" 2>/dev/null || true; }
 
 record_check() {
   printf '%s' "$2" > "$LOGS/$1.check.rc"
-  snapshot_id > "$LOGS/$1.check.snap"
+  snapshot_id "$where" > "$LOGS/$1.check.snap"
   printf '%s' "$TEST_CMD" > "$LOGS/$1.check.cmd"
 }
 
 check_is_fresh() {
-  local snap; snap=$(snapshot_id)
+  local snap; snap=$(snapshot_id "$where")
   [ -n "$snap" ] && [ -f "$LOGS/$1.check.out" ] && [ -f "$LOGS/$1.check.rc" ] \
     && [ "$(cat "$LOGS/$1.check.snap" 2>/dev/null)" = "$snap" ] \
     && [ "$(cat "$LOGS/$1.check.cmd" 2>/dev/null)" = "$TEST_CMD" ]
@@ -233,6 +239,7 @@ fi
 judged=0
 started=0
 while :; do
+  drop_review_dir
   if [ "$MAX" != "0" ] && [ "$started" -ge "$MAX" ]; then
     echo "== $MAX review(s) done, stopping as asked"
     break
@@ -259,6 +266,19 @@ while :; do
   capture_diff "$name" "$diff_file"
   echo "   change under review: $(head -n 1 "$diff_file" | sed 's/^# //'), $(wc -c < "$diff_file") characters"
 
+  where=$WORKDIR
+  ref_line=$(cat "$STATE/review/$name" 2>/dev/null || echo worktree)
+  case "$ref_line" in
+    commit\ *)
+      review_dir=$(mktemp -d "${TMPDIR:-/tmp}/hh-review.XXXXXX")
+      if ! ( cd "$WORKDIR" && git worktree add --detach "$review_dir" "${ref_line#commit }" ) >/dev/null 2>&1; then
+        rmdir "$review_dir" 2>/dev/null || true; review_dir=""
+        echo "   a copy of ${ref_line#commit } could not be made; the task stays in review" >&2
+        exit 1
+      fi
+      where=$review_dir ;;
+  esac
+
   gate=go
   new_failures=""
   check_out="$LOGS/$name.check.out"
@@ -272,7 +292,7 @@ while :; do
       fresh=1
     else
       echo "   the project's check first: $TEST_CMD"
-      run_check "$WORKDIR" "$check_out" || work_rc=$?
+      run_check "$where" "$check_out" || work_rc=$?
       record_check "$name" "$work_rc"
       echo "   it exited $work_rc here"
       fresh=1
@@ -299,7 +319,7 @@ while :; do
     echo "   the change breaks $count check(s) that passed at $ref -> back without a reader"
     {
       printf '# The project'"'"'s own check, before anyone read the code\n\n'
-      printf '`%s`, run in %s.\n\n' "$TEST_CMD" "$WORKDIR"
+      printf '`%s`, run in %s.\n\n' "$TEST_CMD" "$where"
       if [ "$count" -gt 0 ]; then
         printf 'It fails in %s place(s) that were passing at %s:\n\n' "$count" "$ref"
         printf '%s\n' "$new_failures" | sed 's/^/- `/; s/$/`/'
@@ -339,9 +359,9 @@ while :; do
   check_arg=()
   [ "$fresh" = "0" ] && [ -n "$TEST_CMD" ] && check_is_fresh "$name" && fresh=1 || true
   [ "$fresh" = "1" ] && [ -s "$check_out" ] && check_arg=(--check-output "$check_out") || true
-  tasks review-prompt "$task" --diff "$diff_file" --test-command "$TEST_CMD" --workdir "$WORKDIR" \
+  tasks review-prompt "$task" --diff "$diff_file" --test-command "$TEST_CMD" --workdir "$where" \
     "${check_arg[@]}" \
-    | ( cd "$WORKDIR" && claude -p \
+    | ( cd "$where" && claude -p \
         --model "$MODEL" "${effort_flag[@]}" "${fallback_flag[@]}" \
         --permission-mode dontAsk "${prompts_flag[@]}" \
         --tools "Bash,Read,Grep,Glob" \
