@@ -17,6 +17,7 @@ COMMIT=${HH_COMMIT:-1}
 TEST_CMD=${HH_TEST_COMMAND:-}
 MEASURE=${HH_MEASURE:-1}
 BUSY_WAIT=${HH_BUSY_WAIT:-3600}
+LOG_KEEP=${HH_LOG_KEEP:-20}
 STATE="$PROJECT/.hermes-harness"
 LOGS="$STATE/logs"
 
@@ -97,6 +98,10 @@ check_is_fresh() {
 }
 
 tree_is_clean() { [ -z "$(cd "$WORKDIR" && git status --porcelain -- . ':!.hermes-notes' ":!$guard_root" 2>/dev/null)" ]; }
+
+trim_history() {
+  ls -t "$LOGS/history/$1."*".$2" 2>/dev/null | tail -n "+$((LOG_KEEP + 1))" | while IFS= read -r f; do rm -f "$f"; done || true
+}
 
 changed_files() {
   ( cd "$WORKDIR" && git status --porcelain -- . ':!.hermes-notes' 2>/dev/null | wc -l ) || echo 0
@@ -248,6 +253,13 @@ while :; do
   fi
   rc=$?
   set -e
+
+  mkdir -p "$LOGS/history"
+  stamp=$(date -u +%Y%m%dT%H%M%SZ)
+  cp "$LOGS/$name.ndjson" "$LOGS/history/$name.$stamp.a$((attempts + 1)).ndjson" 2>/dev/null || true
+  cp "$LOGS/$name.err" "$LOGS/history/$name.$stamp.a$((attempts + 1)).err" 2>/dev/null || true
+  trim_history "$name" ndjson
+  trim_history "$name" err
 
   new_session=$(python3 - "$LOGS/$name.ndjson" <<'PY'
 import json, pathlib, sys

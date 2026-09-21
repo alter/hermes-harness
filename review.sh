@@ -22,6 +22,7 @@ PATTERN=${HH_PREGATE_PATTERN:-}
 MAX_RETURNS=${HH_MAX_RETURNS:-3}
 INFRA_MAX=${HH_REVIEW_INFRA_MAX:-3}
 INFRA_DEFER=${HH_REVIEW_INFRA_DEFER:-3600}
+LOG_KEEP=${HH_LOG_KEEP:-20}
 DIFF_LIMIT=${HH_REVIEW_DIFF_CHARS:-200000}
 STATE="$PROJECT/.hermes-harness"
 LOGS="$STATE/logs"
@@ -94,6 +95,10 @@ print("\t".join([datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d
                  num(usage.get("input_tokens")), num(usage.get("output_tokens")),
                  env.get("subtype") if isinstance(env.get("subtype"), str) else "?"]))
 PY
+}
+
+trim_history() {
+  ls -t "$LOGS/history/$1."*".$2" 2>/dev/null | tail -n "+$((LOG_KEEP + 1))" | while IFS= read -r f; do rm -f "$f"; done || true
 }
 
 is_deferred() {
@@ -383,6 +388,10 @@ while :; do
   rc=$?
   set -e
   log_call "$name" "$rc"
+
+  mkdir -p "$LOGS/history"
+  cp "$LOGS/$name.review.json" "$LOGS/history/$name.$(date -u +%Y%m%dT%H%M%SZ).review.json" 2>/dev/null || true
+  trim_history "$name" review.json
 
   cost=$(python3 -c "
 import json,sys

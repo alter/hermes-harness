@@ -648,6 +648,16 @@ check "and nothing that merely starts like it"  "$(grep -cE '^Bash\(cat( code\.t
 check "nothing on the list can write a file"    "$(grep -cE '^Bash\((sed|git diff|git show|git log)' "$LP/args.txt" || true)" '^0$'
 check "the whole change is left where the reviewer can read it" "$(cat "$LP/seen.diff" 2>/dev/null)" 'code\.txt'
 
+P="$LP/p-history"; new_project "$P"
+STUB_HERMES_RC=1 loop_run "$P" >/dev/null
+STUB_HERMES_RC=1 loop_run "$P" >/dev/null
+check "two failed attempts each leave their own transcript" \
+  "$(ls "$P"/.hermes-harness/logs/history/*.ndjson 2>/dev/null | wc -l | tr -d ' ')" '^2$'
+STUB_HERMES_DO="$FILL" loop_run "$P" >/dev/null
+STUB_CLAUDE_REPLY="$PASS" loop_review "$P" >/dev/null
+check "the review leaves its own envelope in history too" \
+  "$(ls "$P"/.hermes-harness/logs/history/*.review.json 2>/dev/null | wc -l | tr -d ' ')" '^1$'
+
 echo "== config"
 cfg=$(cat "$SRC/config.yaml")
 check "approvals are off"              "$cfg" 'mode: "off"'
