@@ -270,7 +270,7 @@ check "a gate return clears the older verdict"            "$rvs" 'verify pending
 
 vd="$TMP/vd"; mkdir -p "$vd"
 env_file="$TMP/envelope.json"
-verdict_of() { python3 "$H/verdict.py" "$env_file" "$vd" "$1" "$2" 2>&1; }
+verdict_of() { python3 "$H/verdict.py" "$env_file" "$vd" "$1" "$2" "${3:-0}" 2>&1; }
 # The reviewer was refused a command that merely starts with python3, and ran the
 # project's check anyway. Matching the refusal by the first word called that a
 # review that verified nothing, and threw away a good one.
@@ -296,6 +296,8 @@ check "refusing the project's own check does ruin the review" \
   "$(verdict_of 0 'python3 -m pytest -q')" '^passed 1 no$'
 check "an unusable review goes to its own file" "$(cat "$vd/REVIEW.unusable.md")" 'was refused'
 check "it does not overwrite the usable one" "$(cat "$vd/REVIEW.md")" 'the sentinel is a class'
+check "but not when the harness already measured it fresh" \
+  "$(verdict_of 0 'python3 -m pytest -q' 1)" '^passed 1 yes$'
 cat > "$env_file" <<'JSON'
 {"is_error": false, "permission_denials": [],
  "structured_output": {"verdict": "passed", "summary": "trust me", "unmet": [], "evidence": []}}
@@ -636,6 +638,15 @@ P="$LP/p-unfilled"; new_project "$P"
 STUB_HERMES_DO='echo 2 > code.txt' loop_run "$P" >/dev/null
 check "changed code with an unfilled form is not handed to review" "$(label "$P" status)" '^in_progress$'
 check "the notes say which rows are missing" "$(cat "$P/tasks/10-a/01-x/NOTES.md")" 'unfilled'
+
+P="$LP/p-perms"; new_project "$P"
+STUB_HERMES_DO="$FILL" loop_run "$P" >/dev/null
+STUB_CLAUDE_ARGS="$LP/args.txt" STUB_CLAUDE_DO="cp .hermes-notes/under-review.diff $LP/seen.diff" STUB_CLAUDE_REPLY="$PASS" \
+  HH_TEST_COMMAND='cat code.txt' loop_review "$P" >/dev/null
+check "the reviewer may run the project's check exactly as written" "$(cat "$LP/args.txt")" '^Bash\(cat code\.txt\)$'
+check "and nothing that merely starts like it"  "$(grep -cE '^Bash\(cat( code\.txt \*|:\*)\)$' "$LP/args.txt" || true)" '^0$'
+check "nothing on the list can write a file"    "$(grep -cE '^Bash\((sed|git diff|git show|git log)' "$LP/args.txt" || true)" '^0$'
+check "the whole change is left where the reviewer can read it" "$(cat "$LP/seen.diff" 2>/dev/null)" 'code\.txt'
 
 echo "== config"
 cfg=$(cat "$SRC/config.yaml")

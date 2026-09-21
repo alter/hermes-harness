@@ -153,9 +153,10 @@ capture_diff() {
               sed 's/^/+/' "$f" 2>/dev/null
             done ;;
     esac ) > "$out" 2>/dev/null || true
+  cp "$out" "$out.full"
   if [ "$(wc -c < "$out")" -gt "$DIFF_LIMIT" ]; then
     head -c "$DIFF_LIMIT" "$out" > "$out.cut"
-    printf '\n\n# ... truncated at %s characters. Read the files themselves for the rest.\n' \
+    printf '\n\n# ... truncated at %s characters. The whole change is in .hermes-notes/under-review.diff\n' \
       "$DIFF_LIMIT" >> "$out.cut"
     mv -f "$out.cut" "$out"
   fi
@@ -289,6 +290,7 @@ while :; do
       fi
       printf '%s\n' "$$" > "$STATE/workdir.busy" ;;
   esac
+  mkdir -p "$where/.hermes-notes" && cp "$diff_file.full" "$where/.hermes-notes/under-review.diff" || true
 
   gate=go
   new_failures=""
@@ -358,9 +360,8 @@ while :; do
   fi
 
   allowed=(Read Grep Glob
-           "Bash(git diff:*)" "Bash(git show:*)" "Bash(git log:*)" "Bash(git status:*)"
-           "Bash(git ls-files:*)" "Bash(rg:*)" "Bash(sed -n:*)" "Bash(wc:*)" "Bash(ls:*)")
-  [ -n "$TEST_CMD" ] && allowed+=("Bash(${TEST_CMD%% *}:*)") || true
+           "Bash(git status:*)" "Bash(git ls-files:*)" "Bash(rg:*)" "Bash(wc:*)" "Bash(ls:*)")
+  [ -n "$TEST_CMD" ] && allowed+=("Bash($TEST_CMD)") || true
 
   # One generation back is kept: the second round overwriting the first is how
   # the cost and the turn count of a good review get lost.
@@ -395,7 +396,7 @@ except Exception:
     interrupted
   fi
 
-  outcome=$(python3 "$HARNESS/verdict.py" "$LOGS/$name.review.json" "$task" "$rc" "$TEST_CMD") || {
+  outcome=$(python3 "$HARNESS/verdict.py" "$LOGS/$name.review.json" "$task" "$rc" "$TEST_CMD" "$fresh") || {
     echo "   the verdict could not be parsed (verdict.py failed); counted as an unusable review" >&2
     outcome="none 0 no"
   }

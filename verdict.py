@@ -5,6 +5,7 @@ import sys
 
 envelope_path, task_dir, rc = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
 test_cmd = sys.argv[4] if len(sys.argv) > 4 else ""
+measured = len(sys.argv) > 5 and sys.argv[5] == "1"
 
 why = []
 try:
@@ -99,7 +100,7 @@ if not verdict:
     why.append("the run produced no verdict")
 elif verdict not in ("passed", "failed", "blocked"):
     why.append(f"the verdict '{verdict}' is not one the harness knows")
-if test_cmd:
+if test_cmd and not measured:
     ran = any(test_cmd in e.get("command", "") for e in evidence)
     refused = any(test_cmd in c for c in denied_commands)
     if refused and not ran:
