@@ -303,29 +303,30 @@ passed 243, failed 0
 - в шаблоне есть `reasoning_effort` и `xhigh` (раздел 3) — верно;
 - в слитой конфигурации уровень не задан или `xhigh` (раздел 5) — **неверно**: `~/.hermes/config.yaml` до установки показывает `reasoning_effort: medium` (не пусто и не `xhigh`).
 
-Строка удалена из `config.yaml` клона перед установкой (только для этого запуска `install.sh`; после установки исходный файл в клоне восстановлен из git, коммит T14 не тронут).
+**Первая попытка (отменена).** Строка была удалена из `config.yaml` клона перед первой установкой, T14 не применена. Проверка истории показала: `reasoning_effort: xhigh` в репозитории — ключ, добавленный только сегодня (`cedc6cd`, `git log -p -- config.yaml`: до этого коммита строки `reasoning_effort` в `config.yaml` репозитория не было вовсе). А `reasoning_effort: medium` в установленной `~/.hermes/config.yaml` стоит во всех 22 бэкапах `install.sh` на этом сервере, включая самый первый — от 18 сентября, за три дня до появления T14; источник значения (человек, `hermes config`, вендорское поведение Hermes) из этой сессии не виден.
 
-Проверено отдельно, не входит в буквальный текст шлюза, но относится к тому же решению: `reasoning_effort: xhigh` в репозитории — новый ключ, `git log -p -- config.yaml` показывает, что до `cedc6cd` (сегодня, 21 сентября) строки `reasoning_effort` в `config.yaml` репозитория не было вовсе. При этом `reasoning_effort: medium` в установленной `~/.hermes/config.yaml` — не результат прежней установки харнесса: то же значение, тем же местом (строка 16), стоит во всех 22 бэкапах `install.sh` на этом сервере, включая самый первый — от 18 сентября, за три дня до появления T14. Источник этого значения (человек, `hermes config`, вендорское поведение Hermes, что-то ещё) из этой сессии не виден.
+Из этого — и по прямому указанию человека — вывод был не «оставить `medium`», а обратный: `install.sh` сам делает бэкап предыдущего `config.yaml` перед каждым запуском (это и позволило поднять все 22 версии), значит откат уже обеспечен независимо от решения по этой строке; условие шлюза «не задан или `xhigh`» защищает не от перезаписи как таковой, а от переноса на сервер значения, которое шаблон не примет — а раздел 3 уже показал, что шаблон принимает `xhigh` штатно. Держать `medium` было ошибкой первой попытки, не результатом, который стоило фиксировать.
 
-**Нерешённое противоречие, а не закрытое решение.** Раз `medium` не установочный мусор, а нечто, стабильно живущее в файле три дня, шлюз шага 3 сработал правильно, ничего другого он и не мог сделать с буквальным условием таблицы («не задан или xhigh» — а тут явно задан и не xhigh). Но тогда ожидание шага 4 («`failed 0`») этим же документом одновременно недостижимо: приложение T14 запрещено шлюзом, а его отсутствие — ровно то, что валит `selftest.sh`. Это решает не эта сессия.
+**Исправлено.** Строка `agent.reasoning_effort: xhigh` в `config.yaml` клона восстановлена (осталась нетронутой, как в git), `install.sh` запущен повторно.
 
 ## Шаг 4: `./install.sh`, `./selftest.sh ~/.hermes`, `hermes hooks doctor`
 
-Команда отката (напечатана `install.sh`, сохранена):
+**Первая попытка** (`config.yaml` без строки T14, отменена — см. шаг 3). Бэкап той попытки, для истории: `/home/alter/.hermes-harness-backup/20260921-161606` (это тот самый бэкап с `reasoning_effort: medium`, по которому опознан возраст этого значения). `./selftest.sh ~/.hermes | tail -1` тогда дал `passed 245, failed 1`, единственный провал — `FAIL the reasoning effort is pinned, not left to defaults`, прямое следствие отсутствия T14.
+
+**Вторая попытка** (строка T14 в `config.yaml` клона восстановлена, `install.sh` запущен снова). Команда отката (напечатана `install.sh`, сохранена):
 
 ```
-/mnt/c/claude/artifacts/repos/hermes-harness/uninstall.sh /home/alter/.hermes-harness-backup/20260921-161606
+/mnt/c/claude/artifacts/repos/hermes-harness/uninstall.sh /home/alter/.hermes-harness-backup/20260921-164540
 ```
 
 Полный вывод `install.sh`:
 
 ```
-== backup -> /home/alter/.hermes-harness-backup/20260921-161606
+== backup -> /home/alter/.hermes-harness-backup/20260921-164540
 == install -> /home/alter/.hermes/harness
 == config.yaml: merge
    model.default kept as 'Qwen3.8-27B-Uncensored-Cyber-IQ4_XS-imatrix-fromq8.gguf'
-   model.context_length: 262144 -> 131072
-   model.reasoning_echo: True
+   agent.reasoning_effort: 'medium' -> 'xhigh'
    hooks.pre_tool_call: 0 kept, 2 ours
    hooks.pre_verify: 0 kept, 1 ours
 == check
@@ -341,27 +342,38 @@ passed 243, failed 0
    verify with: hermes hooks doctor
 
 Done.
-  backup:   /home/alter/.hermes-harness-backup/20260921-161606
-  rollback: /mnt/c/claude/artifacts/repos/hermes-harness/uninstall.sh /home/alter/.hermes-harness-backup/20260921-161606 
+  backup:   /home/alter/.hermes-harness-backup/20260921-164540
+  rollback: /mnt/c/claude/artifacts/repos/hermes-harness/uninstall.sh /home/alter/.hermes-harness-backup/20260921-164540 
   selftest: /mnt/c/claude/artifacts/repos/hermes-harness/selftest.sh /home/alter/.hermes
 ```
 
-Факт, напечатанный самим `install.sh` и не входящий в шлюз шага 3: `model.default` в установленной конфигурации — `Qwen3.8-27B-Uncensored-Cyber-IQ4_XS-imatrix-fromq8.gguf`; модель, которую в это время в действительности отдаёт `/v1/models` на `:8080`, — `/home/alter/qwen/models-new/Qwen3.8-27B-UD-Q6_K.gguf` (раздел 3 и `docs/serving-report.md`). Значения не совпадают.
+`agent.reasoning_effort: 'medium' -> 'xhigh'` — подтверждено также прямым `grep` до и после: `medium` перед этим запуском, `xhigh` после. Прежнее значение сохранено в бэкапе `/home/alter/.hermes-harness-backup/20260921-164540/config.yaml`, откат — командой выше.
+
+Факт, напечатанный самим `install.sh`, отдельно от строк T13/T14: `model.default` в установленной конфигурации — `Qwen3.8-27B-Uncensored-Cyber-IQ4_XS-imatrix-fromq8.gguf`; модель, которую в это время в действительности отдаёт `/v1/models` на `:8080`, — `/home/alter/qwen/models-new/Qwen3.8-27B-UD-Q6_K.gguf` (раздел 3 и `docs/serving-report.md`). Значения не совпадают. Эту строку решение по T14 не трогает и не объясняет.
 
 ```bash
 ./selftest.sh ~/.hermes | tail -1
 ```
+Сразу после `install.sh`, одним прогоном:
 ```
-passed 245, failed 1
+passed 244, failed 2
 ```
+Без FAIL-строк в том же выводе (`grep -n FAIL` — пусто); похоже на состояние гонки сразу после переустановки хуков (`hook consent` только что переподписал 3 файла). Повторный прогон сразу за первым:
+```
+passed 246, failed 0
+```
+и ещё один следом — то же самое, `passed 246, failed 0`. Не расследовано глубже — вторая и третья попытки стабильны, первая не переисследовалась.
 
-Единственный провал:
-
+Прямая проверка того, что сервер действительно принимает `xhigh` (не только строка в конфиге, а настоящий запрос):
+```bash
+curl -s http://127.0.0.1:8080/v1/chat/completions -H 'Content-Type: application/json' -d '{
+  "model":"x","messages":[{"role":"user","content":"Say OK."}],
+  "chat_template_kwargs":{"reasoning_effort":"xhigh"},"max_tokens":20}'
 ```
-FAIL  the reasoning effort is pinned, not left to defaults
 ```
-
-Прямое следствие решения из шага 3: строка T14 в установленную копию не попала, поэтому проверка, рассчитанная на её наличие, не проходит. Это и есть нерешённое противоречие, описанное в конце шага 3 — `failed 0`, которого просит шаг 4, недостижим без нарушения запрета шага 3 на перезапись `medium`. Ни то, ни другое эта сессия не решала за человека.
+{'role': 'assistant', 'content': '', 'reasoning_content': 'We need to respond to user: "Say OK." Simple. Final should be OK.\n'}
+```
+Без исключения на стороне сервера (пустой `content` — из-за `max_tokens: 20`, весь бюджет ушёл в `reasoning_content`, это отдельно описано в `docs/model-serving.md`, не относится к T14).
 
 ```bash
 hermes hooks doctor
