@@ -22,9 +22,9 @@ Nothing else matters until both hold.
    The agent then looks busy and does nothing. In practice: llama.cpp `--jinja`, vLLM
    `--enable-auto-tool-choice --tool-call-parser hermes`, SGLang `--tool-call-parser qwen`.
 2. **The served context must be at least 64,000 tokens**, or the agent refuses to start
-   (`MINIMUM_CONTEXT_LENGTH = 64_000`, `agent/model_metadata.py`). Auto-detection will not save you: an unknown
-   `qwen*` id is assumed to be 131,072 whatever the server actually serves, so pin `model.context_length` to the
-   truth.
+   (`MINIMUM_CONTEXT_LENGTH = 64_000`, `agent/model_metadata.py`). Explicit `model.context_length` wins over
+   detection, so a wrong pin is still possible; keep it pinned for reproducibility and keep it equal to the
+   server's `-c`. Without the pin Hermes reads the running `n_ctx` from llama.cpp `/props`.
 
 Check both before installing anything:
 
@@ -99,9 +99,10 @@ One loop, one task at a time:
 6. `BLOCKED.md` written by the agent, or `HH_MAX_ATTEMPTS` (3) attempts without progress → `status: blocked`.
    Putting the task back to `todo` clears its attempt counter, so a reset really is a reset.
 
-**A task that stays open resumes its session; it does not start over.** Hermes ends a turn the moment the model
-answers with prose instead of an action, so an agent that is halfway through a diagnosis simply stops, exit 0,
-mid-sentence. Its Stop-hook analogue (`pre_verify`) only fires on a turn that ran `write_file` or `patch`, so a
+**A task that stays open resumes its session; it does not start over.** With `intent_ack_continuation` and
+`stall_guards` on, Hermes returns the model to action instead of ending the turn on prose up to twice per turn —
+but the third time, or any turn those guards don't catch, still ends on prose mid-diagnosis, exit 0. Its
+Stop-hook analogue (`pre_verify`) only fires on a turn that ran `write_file` or `patch`, so a
 turn spent reading and running commands gets no nudge at all. Starting the next attempt from scratch throws away
 a warm cache — in one measured run 452k of the 499k tokens were cache reads — and repeats the same
 investigation. The loop records the `session_id` from the run and the next attempt continues it with a short
@@ -183,7 +184,9 @@ that has to be testable.
 
 **The reviewer cannot write.** It runs under `--permission-mode dontAsk` with the write tools removed: reads and
 read-only commands go through, a write is refused and lands in `permission_denials`. Its worst failure is a wrong
-verdict, never a wrong edit. A `passed` verdict with an empty `evidence` list is refused by the script, as is a
+verdict, never a wrong edit. The project's own check is allowed exactly as written, with any extra arguments,
+and no wildcard on its first word; nothing else on the allowed list can create a file. A `passed` verdict with
+an empty `evidence` list is refused by the script, as is a
 run where the project's own check (`HH_TEST_COMMAND`) was refused and never ran — that review verified nothing,
 whatever it concluded. The whole command has to match: a refused `timeout 120 python3 tools/x.py` is not a
 refused `python3 -m pytest -q`, and matching on the first word alone threw away a review that had run the suite
@@ -259,9 +262,9 @@ The loop keeps reading the tree from the real checkout, the agent never sees it,
 branch. `run.sh` says so on every start while the tree is still inside the agent's working directory. Stronger
 still, and orthogonal: run Hermes as another user, or in a container with the tree bind-mounted read-only.
 
-The quieter half of the defence is that the agent gains nothing by going there. The loop injects the task into
-the prompt and derives status from evidence, so a forged `status: done` changes nothing except the moment
-someone notices.
+The quieter half of the defence is that the agent gains nothing by going there. A `done` without `verify: passed`
+releases nothing: dependents wait for the reviewer's `verify: passed`, the agent role cannot write `status:
+done`, and `status.sh` lists labels that disagree.
 
 ## What we use of Hermes, and what we left alone
 
@@ -292,7 +295,9 @@ MCP tools behind a search the model has to write well, which is the opposite of 
 `tool_use_enforcement`, `execution_guidance` and `intent_ack_continuation` are forced on rather than left at
 `auto` — the first two would switch themselves on for a `qwen` id, the third would not.
 
-Compression triggers at 75% for any window under 512k, whatever `compression.threshold` says.
+Compression triggers at `max(compression.threshold, 0.75)` for any window under 512k; at 131072 with no
+`max_tokens` set that is 98,304 tokens (a set `max_tokens` is subtracted from the window before the
+multiplication). `compression.threshold_tokens` is a separate, absolute cap on top of the ratio.
 `micro_compact` stays off: it rewrites the sent history every turn and destroys the prefix cache, which is the
 main thing keeping a local model quick.
 
