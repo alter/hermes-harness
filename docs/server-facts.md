@@ -271,3 +271,222 @@ nvidia-smi --query-gpu=name,driver_version,memory.total,memory.used --format=csv
 name, driver_version, memory.total [MiB], memory.used [MiB]
 NVIDIA GeForce RTX 5090, 616.56, 32607 MiB, 28900 MiB
 ```
+
+# После выкатки (R4)
+
+Условие начала проверено: `6af3c16` (версия, которую нельзя было нести на сервер) — предок текущего `HEAD`, т.е. T00–T09 и T13/T14 первой части уже в `origin/main`, идти дальше можно.
+
+## Шаг 1–2: `git pull`, `./selftest.sh`
+
+`run.lock`/`review.lock` не найдены нигде под `/home/alter` и под клонами (`/home/alter/hh-sandbox/.hermes-harness`, `/mnt/c/claude/artifacts/repos/hft/.hermes-harness`) — до и после каждого шага R4.
+
+```bash
+git pull
+```
+```
+Already up to date.
+```
+
+```bash
+./selftest.sh | tail -1
+```
+```
+passed 243, failed 0
+```
+
+## Шаг 3: ворота для двух строк `config.yaml`
+
+`model.reasoning_echo: true` (T13): в шаблоне на сервере есть `preserve_thinking` (`docs/server-facts.md`, раздел 3: `preserve_thinking True`) — строка остаётся без изменений.
+
+`agent.reasoning_effort: xhigh` (T14): три условия по таблице —
+- в команде запуска нет `--reasoning-effort` (раздел 1) — верно;
+- в шаблоне есть `reasoning_effort` и `xhigh` (раздел 3) — верно;
+- в слитой конфигурации уровень не задан или `xhigh` (раздел 5) — **неверно**: `~/.hermes/config.yaml` до установки показывает `reasoning_effort: medium` (не пусто и не `xhigh`).
+
+Строка удалена из `config.yaml` клона перед установкой (только для этого запуска `install.sh`; после установки исходный файл в клоне восстановлен из git, коммит T14 не тронут). Причина — буквально условие из таблицы: слитая конфигурация уже несёт явное значение (`medium`), отличное от `xhigh`, а строгость этой строки обоснована тем, что неизвестное серверу значение уровня валит каждый запрос — здесь значение известное и рабочее, перезаписывать его установкой не входит в разрешённое этим шлюзом действие.
+
+## Шаг 4: `./install.sh`, `./selftest.sh ~/.hermes`, `hermes hooks doctor`
+
+Команда отката (напечатана `install.sh`, сохранена):
+
+```
+/mnt/c/claude/artifacts/repos/hermes-harness/uninstall.sh /home/alter/.hermes-harness-backup/20260921-161606
+```
+
+Полный вывод `install.sh`:
+
+```
+== backup -> /home/alter/.hermes-harness-backup/20260921-161606
+== install -> /home/alter/.hermes/harness
+== config.yaml: merge
+   model.default kept as 'Qwen3.8-27B-Uncensored-Cyber-IQ4_XS-imatrix-fromq8.gguf'
+   model.context_length: 262144 -> 131072
+   model.reasoning_echo: True
+   hooks.pre_tool_call: 0 kept, 2 ours
+   hooks.pre_verify: 0 kept, 1 ours
+== check
+   hooks: 3
+   model: Qwen3.8-27B-Uncensored-Cyber-IQ4_XS-imatrix-fromq8.gguf
+== hook consent
+   agent.shell_hooks is not importable from any python this script can find;
+   refreshing the consent file directly.
+   re-stamped: pre_tool_call -> guard-paths.py
+   re-stamped: pre_tool_call -> guard-read.py
+   re-stamped: pre_verify -> guard-notes.py
+   3 approval(s) refreshed in /home/alter/.hermes/shell-hooks-allowlist.json
+   verify with: hermes hooks doctor
+
+Done.
+  backup:   /home/alter/.hermes-harness-backup/20260921-161606
+  rollback: /mnt/c/claude/artifacts/repos/hermes-harness/uninstall.sh /home/alter/.hermes-harness-backup/20260921-161606 
+  selftest: /mnt/c/claude/artifacts/repos/hermes-harness/selftest.sh /home/alter/.hermes
+```
+
+Факт, напечатанный самим `install.sh` и не входящий в шлюз шага 3: `model.default` в установленной конфигурации — `Qwen3.8-27B-Uncensored-Cyber-IQ4_XS-imatrix-fromq8.gguf`; модель, которую в это время в действительности отдаёт `/v1/models` на `:8080`, — `/home/alter/qwen/models-new/Qwen3.8-27B-UD-Q6_K.gguf` (раздел 3 и `docs/serving-report.md`). Значения не совпадают.
+
+```bash
+./selftest.sh ~/.hermes | tail -1
+```
+```
+passed 245, failed 1
+```
+
+Единственный провал:
+
+```
+FAIL  the reasoning effort is pinned, not left to defaults
+```
+
+Это прямое и ожидаемое следствие решения из шага 3: строка T14 в установленную копию не попала, поэтому проверка, рассчитанная на её наличие, не проходит. Решение не пересмотрено.
+
+```bash
+hermes hooks doctor
+```
+```
+Checking 3 configured shell hook(s)...
+
+  [pre_tool_call] python3 /home/alter/.hermes/harness/hooks/guard-paths.py
+      ✓ script exists and is executable
+      ✓ allowlisted (approved 2026-09-21T13:16:10.547362Z)
+      ✓ script unchanged since approval
+      ✓ ran clean with empty stdout (exit=0, 0.156s) — hook is observer-only
+
+  [pre_tool_call] python3 /home/alter/.hermes/harness/hooks/guard-read.py
+      ✓ script exists and is executable
+      ✓ allowlisted (approved 2026-09-21T13:16:10.547362Z)
+      ✓ script unchanged since approval
+      ✓ ran clean with empty stdout (exit=0, 0.135s) — hook is observer-only
+
+  [pre_verify] python3 /home/alter/.hermes/harness/hooks/guard-notes.py
+      ✓ script exists and is executable
+      ✓ allowlisted (approved 2026-09-21T13:16:10.547362Z)
+      ✓ script unchanged since approval
+      ✓ ran clean with empty stdout (exit=0, 0.135s) — hook is observer-only
+
+All shell hooks look healthy.
+```
+
+Без предупреждений.
+
+## Шаг 5: `diff -rq` клона и установленной копии
+
+```bash
+diff -rq /mnt/c/claude/artifacts/repos/hermes-harness ~/.hermes/harness
+```
+```
+Only in /mnt/c/claude/artifacts/repos/hermes-harness: .git
+Only in /mnt/c/claude/artifacts/repos/hermes-harness: .gitignore
+Only in /mnt/c/claude/artifacts/repos/hermes-harness: LICENSE
+Only in /mnt/c/claude/artifacts/repos/hermes-harness: README.md
+Files /mnt/c/claude/artifacts/repos/hermes-harness/__pycache__/tasks.cpython-314.pyc and /home/alter/.hermes/harness/__pycache__/tasks.cpython-314.pyc differ
+Only in /mnt/c/claude/artifacts/repos/hermes-harness: config.yaml
+Only in /mnt/c/claude/artifacts/repos/hermes-harness: docs
+Only in /mnt/c/claude/artifacts/repos/hermes-harness: install.sh
+Only in /mnt/c/claude/artifacts/repos/hermes-harness: project-template
+Only in /mnt/c/claude/artifacts/repos/hermes-harness: selftest.sh
+Only in /mnt/c/claude/artifacts/repos/hermes-harness: uninstall.sh
+```
+
+В скриптах (`run.sh`, `review.sh`, `status.sh`, `tasks.py`, `verdict.py`, `hooks/guard-notes.py`) различий нет — все перечисленные расхождения это файлы, которых в установленной копии нет по устройству `install.sh` (git-метаданные, документация, сам `config.yaml`-источник) либо скомпилированный `.pyc`.
+
+## Шаг 6: один прогон одной задачи вручную
+
+Проект: `/home/alter/hh-sandbox` (отдельная песочница с деревом задач, не связана с этим репозиторием). Задача `10-x/02-second` создана этой же сессией по образцу уже закрытой `10-x/01-hello` — тривиальная (`src/second.py` печатает `second`) — специально для этой проверки.
+
+Первая попытка (`HH_MAX_TASKS=1` для `run.sh`):
+
+```
+== 10-x-02-second (attempt 1/3)
+   VERIFY `python3 src/second.py | grep -qx second` exited 1
+   hermes exited 1 -> stays open
+```
+
+Причина — не код харнесса. `.hermes-harness/logs/10-x-02-second.err` и `.ndjson` дали:
+
+```
+text: "Custom endpoint didn't respond in time on any of 3 attempts — it looks temporarily unavailable. ... Provider said: Connection error."
+```
+
+Прямая проверка в тот же момент: `pgrep -a llama-server` — пусто; `ss -tln` — `:8080` не слушается; хвост `/home/alter/qwen/models-new/server.log`:
+
+```
+50.15.387.746 I srv    operator(): operator(): cleaning up before exit...
+```
+
+Процесс `llama-server` (тот, что описан в разделе 1, pid 334631) завершился между разделом 5 `docs/serving-report.md` (последний успешный запрос к нему, task 752) и этой попыткой — не по команде этой сессии: в этой сессии между этими двумя моментами выполнялись только R3 (`claude`, без обращения к `:8080`) и шаги 1–5 этого раздела (`git`, `selftest.sh`, `install.sh`, `hermes hooks doctor`, `diff`), ни один не обращается к `:8080` или к процессу `llama-server`. Через непродолжительное время `llama-server` оказался снова запущен — тем же образом, с тем же командным флагом (сверено с разделом 1), но с другим pid (387328) и слушающим `:8080`; кем или чем он был перезапущен, из этой сессии не видно.
+
+Вторая попытка, после того как `curl -s http://127.0.0.1:8080/health` снова стал отвечать `{"status":"ok"}`:
+
+```
+== 10-x-02-second (attempt 2/3)
+   resuming session 20260921_162336_0a83de rather than starting over
+   VERIFY `python3 src/second.py | grep -qx second` exited 0
+   the working tree changed, 4 path(s) differ from HEAD -> review
+   committed in /home/alter/hh-sandbox
+```
+
+`src/second.py`:
+```python
+import sys
+
+sys.stdout.write("second\n")
+```
+
+Затем `HH_REVIEW_ONLY=10-x/02-second` для `review.sh`:
+
+```
+== 10-x-02-second (review round 1/2)
+   change under review: the change under review is commit 6f39eebc2fca48836d3010505162c1a6ca5d7455, 527 characters
+   verdict: passed (denied commands: 1, usable: yes)
+   cost: 0.25 USD
+   -> done
+```
+
+Проверка трёх фактов, как в задаче:
+
+```bash
+cat /home/alter/hh-sandbox/.hermes-harness/calls.tsv
+```
+```
+2026-09-21T13:30:38Z	10-x-02-second	0	0.2504595	5	6	1290	success
+```
+
+```bash
+~/.hermes/harness/status.sh
+```
+(фрагмент)
+```
+== reviews
+   reviewer verdicts: done 1
+   ...
+   reviewer calls: 1
+```
+
+```bash
+head -1 /home/alter/hh-sandbox/.hermes-harness/review/10-x-02-second
+```
+```
+commit 6f39eebc2fca48836d3010505162c1a6ca5d7455
+```
+
+Все три подтверждены.
