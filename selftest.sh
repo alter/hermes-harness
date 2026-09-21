@@ -673,6 +673,7 @@ check "the deny floor covers the tree" "$cfg" 'tasks/\*labels.txt'
 check "the deny floor covers git push" "$cfg" 'git push'
 check "hooks are auto-accepted"        "$cfg" 'hooks_auto_accept: true'
 check "earlier reasoning is replayed to the model" "$cfg" 'reasoning_echo: true'
+check "the reasoning effort is pinned, not left to defaults" "$cfg" 'reasoning_effort: xhigh'
 
 allow="$TARGET/shell-hooks-allowlist.json"
 if [ -f "$allow" ]; then

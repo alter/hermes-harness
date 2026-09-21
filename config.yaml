@@ -13,6 +13,7 @@ toolsets:
 agent:
   max_turns: 0
   max_verify_nudges: 8
+  reasoning_effort: xhigh
   coding_context: focus
   tool_use_enforcement: true
   execution_guidance: true
