@@ -24,7 +24,7 @@ hermes ${PROFILE:+-p "$PROFILE"} chat --help 2>/dev/null | grep -q -- 'stream-js
   || { echo "this hermes has no 'chat --format stream-json'; the harness needs a build that has it (see README)" >&2; exit 1; }
 [ -d "$ROOT" ] || { echo "no task tree at $ROOT" >&2; exit 1; }
 [ -f "$HARNESS/tasks.py" ] || { echo "harness not installed at $HARNESS (run install.sh)" >&2; exit 1; }
-mkdir -p "$LOGS" "$STATE/attempts" "$STATE/sessions"
+mkdir -p "$LOGS" "$STATE/attempts" "$STATE/sessions" "$STATE/own"
 printf '*\n' > "$STATE/.gitignore"
 
 LOCK="$STATE/run.lock"
@@ -95,6 +95,8 @@ check_is_fresh() {
     && [ "$(cat "$LOGS/$1.check.cmd" 2>/dev/null)" = "$TEST_CMD" ]
 }
 
+tree_is_clean() { [ -z "$(cd "$WORKDIR" && git status --porcelain -- . ':!.hermes-notes' ":!$guard_root" 2>/dev/null)" ]; }
+
 changed_files() {
   ( cd "$WORKDIR" && git status --porcelain -- . ':!.hermes-notes' 2>/dev/null | wc -l ) || echo 0
 }
@@ -159,11 +161,12 @@ while :; do
   name=$(slug "$task")
   attempts_file="$STATE/attempts/$name"
   attempts=$(cat "$attempts_file" 2>/dev/null || echo 0)
+  own_file="$STATE/own/$name"
 
   was=$(status_of "$task")
   if [ "$was" = "todo" ] && [ "$attempts" -gt 0 ]; then
     echo "== $name: status was reset to todo, so the attempt counter goes with it"
-    rm -f "$attempts_file" "$STATE/sessions/$name"
+    rm -f "$attempts_file" "$STATE/sessions/$name" "$own_file"
     attempts=0
   fi
 
@@ -197,6 +200,11 @@ while :; do
   cp "$notes_dir/NOTES.md" "$notes_dir/.scaffold"
 
   before=$(snapshot_id)
+  if tree_is_clean; then
+    printf '%s' "$before" > "$own_file"
+  elif [ ! -s "$own_file" ] || [ "$(cat "$own_file")" != "$before" ]; then
+    rm -f "$own_file"
+  fi
   if [ -n "$resume_id" ]; then
     echo "   resuming session $resume_id rather than starting over"
     prompt_source=continuation
@@ -240,6 +248,7 @@ PY
 )
   [ -n "$new_session" ] && printf '%s' "$new_session" > "$session_file"
   after=$(snapshot_id)
+  [ -f "$own_file" ] && printf '%s' "$after" > "$own_file"
 
   notes_written=0
   if [ -s "$notes_dir/NOTES.md" ] && ! cmp -s "$notes_dir/NOTES.md" "$notes_dir/.scaffold"; then
@@ -263,7 +272,7 @@ PY
     echo "   the agent says it is blocked"
     tasks set "$task" status blocked
     ledger "$name" worker in_progress blocked "agent wrote BLOCKED.md"
-    rm -f "$session_file"
+    rm -f "$session_file" "$own_file"
     note "$task" "harness: agent wrote BLOCKED.md, exit $rc"
     continue
   fi
@@ -316,9 +325,12 @@ PY
     if ! ( cd "$WORKDIR" && git config user.email >/dev/null 2>&1 ); then
       echo "   not committing: git has no user.email here; set one and commit yourself"
       note "$task" "harness: not committed — git has no identity configured in $WORKDIR"
+    elif [ ! -s "$own_file" ]; then
+      echo "   not committing: the working copy already held changes that are not this task's"
+      note "$task" "harness: not committed — the working copy held changes from before this task; the work is left uncommitted for review"
     else
       ( cd "$WORKDIR" && git add -- . ":!$guard_root" ':!.hermes-notes' >/dev/null 2>&1 || true )
-      if commit_out=$( cd "$WORKDIR" && git commit -m "$name: $(section "$task" GOAL | head -n 1)" 2>&1 ); then
+      if commit_out=$( cd "$WORKDIR" && git commit -m "$name: $(section "$task" GOAL | head -n 1)" -- . ":!$guard_root" ':!.hermes-notes' 2>&1 ); then
         echo "   committed in $WORKDIR"
         printf 'commit %s\n' "$( cd "$WORKDIR" && git rev-parse HEAD )" > "$STATE/review/$name"
       else
@@ -328,6 +340,7 @@ PY
       fi
     fi
   fi
+  rm -f "$own_file"
 
 done
 

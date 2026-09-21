@@ -564,6 +564,25 @@ check "and is put off, not blocked"                                   "$(label "
 st=$(cd "$P" && HH_HOME="$H" bash "$SRC/status.sh" "$P" 2>&1 || true)
 check "status.sh shows it to a human"                                 "$st" '10-a-01-x +2 in a row'
 
+# The review record's own file name may be the long, symlink-mangled slug (see
+# the note in fix-tasks.md); read whatever run.sh actually wrote instead of
+# assuming the short form.
+review_file() { ls "$1/.hermes-harness/review/"* 2>/dev/null | head -n 1; }
+
+P="$LP/p-stranger"; new_project "$P"; echo stranger > "$P/stranger.txt"
+STUB_HERMES_DO="$FILL" loop_run "$P" >/dev/null
+check "a copy that was dirty before the task is not committed" "$(cd "$P" && git log --oneline | wc -l | tr -d ' ')" '^1$'
+check "the task still reaches review"                          "$(label "$P" status)" '^review$'
+check "as uncommitted work"                                    "$(cat "$(review_file "$P")" 2>/dev/null)" '^worktree$'
+check "the stranger's file is still there"                     "$(cat "$P/stranger.txt")" '^stranger$'
+
+P="$LP/p-staged"; new_project "$P"
+( cd "$P" && printf '.hermes-harness/\n.hermes-notes/\n' > .gitignore && git add -A && git commit -qm "tree tracked" \
+  && echo 'milestone: M1' >> tasks/10-a/01-x/labels.txt && git add tasks/10-a/01-x/labels.txt )
+STUB_HERMES_DO="$FILL" loop_run "$P" >/dev/null
+check "the task's own work is committed"            "$(cd "$P" && git show --name-only --format= HEAD)" 'code.txt'
+check "a task file staged beforehand is left out"   "$(cd "$P" && git show --name-only --format= HEAD | grep -c '^tasks/' || true)" '^0$'
+
 echo "== config"
 cfg=$(cat "$SRC/config.yaml")
 check "approvals are off"              "$cfg" 'mode: "off"'
