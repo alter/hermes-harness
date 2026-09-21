@@ -274,7 +274,7 @@ while :; do
     commit\ *)
       review_dir=$(mktemp -d "${TMPDIR:-/tmp}/hh-review.XXXXXX")
       if ! ( cd "$WORKDIR" && git worktree add --detach "$review_dir" "${ref_line#commit }" ) >/dev/null 2>&1; then
-        rmdir "$review_dir" 2>/dev/null || true; review_dir=""
+        rm -rf "$review_dir" 2>/dev/null || true; review_dir=""
         echo "   a copy of ${ref_line#commit } could not be made; the task stays in review" >&2
         exit 1
       fi
