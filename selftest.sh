@@ -304,6 +304,85 @@ JSON
 check "a supported pass is usable" "$(verdict_of 0 'python3 -m pytest -q')" '^passed 0 yes$'
 empty "a usable review clears the unusable one" "$(cat "$vd/REVIEW.unusable.md" 2>/dev/null)"
 
+cat > "$env_file" <<'JSON'
+{"is_error": false, "permission_denials": [],
+ "structured_output": {"verdict": "passed", "summary": 42, "unmet": [],
+   "evidence": [{"claim": "the suite passes"}]}}
+JSON
+check "a non-string summary is refused, not crashed on" "$(verdict_of 0 '')" '^passed 0 no$'
+
+cat > "$env_file" <<'JSON'
+{"is_error": false, "permission_denials": [],
+ "structured_output": {"verdict": "passed", "summary": "s", "unmet": [],
+   "evidence": "I read everything"}}
+JSON
+check "evidence as a string is not a list of evidence" "$(verdict_of 0 '')" '^passed 0 no$'
+
+cat > "$env_file" <<'JSON'
+{"is_error": false, "permission_denials": [],
+ "structured_output": {"verdict": "passed", "summary": "s", "unmet": [],
+   "evidence": [{"claim": 42}]}}
+JSON
+check "a non-string claim is refused" "$(verdict_of 0 '')" '^passed 0 no$'
+
+cat > "$env_file" <<'JSON'
+{"is_error": false, "permission_denials": [],
+ "structured_output": {"verdict": "passed", "summary": "s", "unmet": [],
+   "evidence": [{"claim": "ran it", "command": 42}]}}
+JSON
+check "a non-string command in evidence is refused" "$(verdict_of 0 '')" '^passed 0 no$'
+
+cat > "$env_file" <<'JSON'
+{"is_error": false, "permission_denials": [],
+ "structured_output": {"verdict": "passed", "summary": "s", "unmet": [42],
+   "evidence": [{"claim": "x"}]}}
+JSON
+check "a non-string unmet element does not vanish into a clean pass" "$(verdict_of 0 '')" '^passed 0 no$'
+
+cat > "$env_file" <<'JSON'
+{"is_error": false, "permission_denials": [],
+ "structured_output": {"verdict": "passed", "summary": "s",
+   "evidence": [{"claim": "x"}]}}
+JSON
+check "a missing unmet field is refused, not assumed empty" "$(verdict_of 0 '')" '^passed 0 no$'
+
+cat > "$env_file" <<'JSON'
+{"is_error": false,
+ "permission_denials": [{"tool_name": "Bash", "tool_input": 42}],
+ "structured_output": {"verdict": "passed", "summary": "s", "unmet": [],
+   "evidence": [{"claim": "x"}]}}
+JSON
+check "a malformed permission denial does not crash the parse" "$(verdict_of 0 '')" '^passed [01] no$'
+
+cat > "$env_file" <<'JSON'
+{"is_error": false, "permission_denials": [], "structured_output": "passed"}
+JSON
+check "structured_output as a string is not the agreed shape" "$(verdict_of 0 '')" '^none 0 no$'
+
+printf '[1,2,3]' > "$env_file"
+check "an envelope that is a JSON list is not a JSON object" "$(verdict_of 0 '')" '^none 0 (no|infra)$'
+
+cat > "$env_file" <<'JSON'
+{"is_error": false, "permission_denials": [],
+ "structured_output": {"verdict": "passed", "summary": "s",
+   "unmet": ["criterion not met"], "evidence": [{"claim": "read source"}]}}
+JSON
+check "a passing verdict cannot list unmet criteria" "$(verdict_of 0 '')" '^passed 0 no$'
+
+cat > "$env_file" <<'JSON'
+{"is_error": false, "permission_denials": [],
+ "structured_output": {"verdict": "banana", "summary": "s", "unmet": [],
+   "evidence": [{"claim": "x"}]}}
+JSON
+check "an unknown verdict is not usable" "$(verdict_of 0 '')" '^banana 0 no$'
+
+cat > "$env_file" <<'JSON'
+{"is_error": false, "permission_denials": [],
+ "structured_output": {"verdict": "failed", "summary": "s", "unmet": [],
+   "evidence": []}}
+JSON
+check "a failing verdict must say what is missing" "$(verdict_of 0 '')" '^failed 0 no$'
+
 echo "== notes form"
 sc=$(python3 "$H/tasks.py" --root "$TMP" scaffold "$rv" 2>&1)
 check "the form has one row per VERIFY criterion" "$(printf '%s' "$sc" | grep -c '(not checked) | (not checked)')" '^1$'
@@ -377,6 +456,19 @@ out=$(STUB_HERMES_HELP='  -Q, --quiet' loop_run "$P"); lrc=$?
 check "a hermes without stream-json is refused by name"  "$out" 'stream-json'
 check "the refusal is an error exit"                     "$lrc" '^1$'
 check "and the task was not touched"                     "$(label "$P" status)" '^todo$'
+
+P="$LP/p-banana"; new_project "$P"
+printf 'priority: P1\nstatus: review\nverify: pending\nrole: AGENT\n' > "$P/tasks/10-a/01-x/labels.txt"
+BANANA='{"is_error":false,"total_cost_usd":0,"structured_output":{"verdict":"banana","summary":"s","evidence":[{"claim":"x"}],"unmet":[]}}'
+out=$(STUB_CLAUDE_REPLY="$BANANA" HH_REVIEW_MAX=5 loop_review "$P")
+check "an unknown verdict is reviewed twice, not forever" "$out" 'reviewed: 2,'
+check "and then a human is called"                         "$(label "$P" status)" '^blocked$'
+
+P="$LP/p-string-evidence"; new_project "$P"
+printf 'priority: P1\nstatus: review\nverify: pending\nrole: AGENT\n' > "$P/tasks/10-a/01-x/labels.txt"
+STRINGY='{"is_error":false,"total_cost_usd":0,"structured_output":{"verdict":"passed","summary":"s","evidence":"I read everything","unmet":[]}}'
+STUB_CLAUDE_REPLY="$STRINGY" loop_review "$P" >/dev/null
+check "a pass whose evidence is not a list closes nothing" "$(label "$P" status) $(label "$P" verify)" '^review pending$'
 
 echo "== config"
 cfg=$(cat "$SRC/config.yaml")

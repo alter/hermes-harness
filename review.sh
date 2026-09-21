@@ -304,7 +304,10 @@ while :; do
     interrupted
   fi
 
-  outcome=$(python3 "$HARNESS/verdict.py" "$LOGS/$name.review.json" "$task" "$rc" "$TEST_CMD")
+  outcome=$(python3 "$HARNESS/verdict.py" "$LOGS/$name.review.json" "$task" "$rc" "$TEST_CMD") || {
+    echo "   the verdict could not be parsed (verdict.py failed); counted as an unusable review" >&2
+    outcome="none 0 no"
+  }
   read -r verdict denied usable <<<"$outcome"
 
   cost=$(python3 -c "
@@ -365,6 +368,11 @@ except Exception as exc:
       tasks set "$task" status blocked --as reviewer
       ledger "$name" reviewer review blocked "reviewer could not judge it" "$cost"
       echo "   -> blocked, a human has to settle it"
+      judged=$((judged + 1)) ;;
+    *)
+      tasks set "$task" status blocked --as reviewer
+      ledger "$name" reviewer review blocked "verdict '$verdict' is not one the harness knows" "$cost"
+      echo "   -> blocked: '$verdict' is not a verdict"
       judged=$((judged + 1)) ;;
   esac
 done
