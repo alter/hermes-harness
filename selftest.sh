@@ -600,6 +600,20 @@ check "the reviewer stands in the commit under review"  "$(cat "$LP/seen.txt")" 
 check "the project's check ran there too"               "$(cat "$P/.hermes-harness/logs/$(log_base "$P").check.out")" '^2$'
 check "the temporary copy is gone afterwards"           "$(cd "$P" && git worktree list | wc -l | tr -d ' ')" '^1$'
 
+P="$LP/p-busy-writer"; new_project "$P"; mkdir -p "$P/.hermes-harness"
+printf 'priority: P1\nstatus: review\nverify: pending\nrole: AGENT\n' > "$P/tasks/10-a/01-x/labels.txt"
+printf '%s %s\n' "$$" now > "$P/.hermes-harness/run.lock"
+out=$(STUB_CLAUDE_REPLY="$PASS" loop_review "$P"); lrc=$?
+check "uncommitted work is not reviewed while the writing loop is alive" "$lrc" '^75$'
+check "the refusal says who holds the copy"                               "$out" 'the writing loop'
+check "and the task keeps its status"                                     "$(label "$P" status)" '^review$'
+
+P="$LP/p-busy-reviewer"; new_project "$P"; mkdir -p "$P/.hermes-harness"
+printf '%s\n' "$$" > "$P/.hermes-harness/workdir.busy"
+out=$(HH_BUSY_WAIT=1 STUB_HERMES_DO="$FILL" loop_run "$P"); lrc=$?
+check "the writing loop waits for a review of the same copy, then gives up" "$lrc" '^75$'
+check "without touching the task"                                           "$(label "$P" status)" '^todo$'
+
 echo "== config"
 cfg=$(cat "$SRC/config.yaml")
 check "approvals are off"              "$cfg" 'mode: "off"'

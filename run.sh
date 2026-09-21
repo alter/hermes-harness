@@ -16,6 +16,7 @@ RUN_VERIFY=${HH_RUN_VERIFY:-1}
 COMMIT=${HH_COMMIT:-1}
 TEST_CMD=${HH_TEST_COMMAND:-}
 MEASURE=${HH_MEASURE:-1}
+BUSY_WAIT=${HH_BUSY_WAIT:-3600}
 STATE="$PROJECT/.hermes-harness"
 LOGS="$STATE/logs"
 
@@ -153,6 +154,24 @@ measure() {
 finished=0
 started=0
 while :; do
+  waited=0
+  while [ -f "$STATE/workdir.busy" ]; do
+    holder=$(cat "$STATE/workdir.busy" 2>/dev/null)
+    if [ -z "$holder" ] || ! kill -0 "$holder" 2>/dev/null; then
+      rm -f "$STATE/workdir.busy"
+      break
+    fi
+    if [ "$waited" -ge "$BUSY_WAIT" ]; then
+      echo "a review is using this working copy (pid $holder); gave up waiting after ${BUSY_WAIT}s" >&2
+      exit 75
+    fi
+    step=10
+    remaining=$((BUSY_WAIT - waited))
+    [ "$remaining" -lt "$step" ] && step=$remaining
+    sleep "$step"
+    waited=$((waited + step))
+  done
+
   if [ "$MAX_TASKS" != "0" ] && [ "$started" -ge "$MAX_TASKS" ]; then
     echo "== $MAX_TASKS task(s) attempted, stopping as asked"
     break

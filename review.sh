@@ -61,6 +61,7 @@ review_dir=""
 drop_review_dir() {
   [ -n "$review_dir" ] && ( cd "$WORKDIR" && git worktree remove --force "$review_dir" ) >/dev/null 2>&1
   review_dir=""
+  rm -f "$STATE/workdir.busy"
 }
 
 release_lock() { [ "$(cut -d' ' -f1 "$LOCK" 2>/dev/null)" = "$$" ] && rm -f "$LOCK"; drop_review_dir; }
@@ -277,6 +278,15 @@ while :; do
         exit 1
       fi
       where=$review_dir ;;
+    *)
+      if [ -f "$STATE/run.lock" ]; then
+        holder=$(cut -d' ' -f1 "$STATE/run.lock" 2>/dev/null)
+        if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+          echo "   $name is uncommitted work and the writing loop (pid $holder) is using that working copy; try again when it stops"
+          exit 75
+        fi
+      fi
+      printf '%s\n' "$$" > "$STATE/workdir.busy" ;;
   esac
 
   gate=go
