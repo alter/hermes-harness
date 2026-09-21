@@ -7,7 +7,7 @@ Two hands, one tree. Hermes writes code and records what it did. A reviewer runn
 Claude Code on Sonnet/Opus — owns the `verify:` field and decides whether a task is really finished. Neither can
 do the other's job, and the split is enforced, not requested.
 
-Built against hermes-agent `0.21.3` (tag `v2026.9.14`), read from the source rather than the README.
+Built against hermes-agent upstream commit `784d5c3f` (2026-09-16; the package reports `0.21.3`), read from the source rather than the README. The release tag `v2026.9.14` reports the same version and is not enough: it has no `chat --format stream-json`, which `run.sh` depends on and checks for at start.
 
 Two working documents sit in `docs/`: [`model-serving.md`](docs/model-serving.md) — which model, which build,
 how to serve it on one 32 GB card and what to check afterwards; [`operating.md`](docs/operating.md) — what to set

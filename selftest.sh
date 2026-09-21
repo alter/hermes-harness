@@ -332,6 +332,52 @@ st=$(cd "$TMP" && HH_HOME="$H" HH_TASK_ROOT="$TMP" bash "$SRC/status.sh" "$TMP" 
 check "status.sh reads a tree with no ledger yet" "$st" '== tree'
 check "status.sh counts by status"                "$st" 'review'
 
+echo "== loops"
+LP="$TMP/loops"; mkdir -p "$LP/bin"
+cat > "$LP/bin/hermes" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in *" --help "*) printf '%s\n' "${STUB_HERMES_HELP:-  --format {text,stream-json}}"; exit 0 ;; esac
+cat > /dev/null
+[ -n "${STUB_HERMES_DO:-}" ] && eval "$STUB_HERMES_DO"
+printf '{"type":"result","session_id":"stub-session","exit_code":0}\n'
+exit "${STUB_HERMES_RC:-0}"
+EOF
+cat > "$LP/bin/claude" <<'EOF'
+#!/usr/bin/env bash
+case " $* " in *" --help "*) echo "--effort --fallback-model"; exit 0 ;; esac
+[ -n "${STUB_CLAUDE_ARGS:-}" ] && printf '%s\n' "$@" > "$STUB_CLAUDE_ARGS"
+cat > "${STUB_CLAUDE_PROMPT:-/dev/null}"
+[ -n "${STUB_CLAUDE_DO:-}" ] && eval "$STUB_CLAUDE_DO"
+printf '%s\n' "${STUB_CLAUDE_REPLY:-{\}}"
+exit "${STUB_CLAUDE_RC:-0}"
+EOF
+chmod +x "$LP/bin/hermes" "$LP/bin/claude"
+new_project() {
+  rm -rf "$1"; mkdir -p "$1/tasks/10-a/01-x"
+  ( cd "$1" && git init -q . && git config user.email t@t && git config user.name t \
+    && printf 'tasks/\n.hermes-harness/\n.hermes-notes/\n' > .gitignore && echo 1 > code.txt \
+    && git add .gitignore code.txt && git commit -qm init )
+  mk "$1/tasks/10-a/01-x" "x" "code.txt" "true" "AGENT"
+  printf 'priority: P1\nstatus: todo\nverify: pending\nrole: AGENT\n' > "$1/tasks/10-a/01-x/labels.txt"
+}
+loop_run()    { ( cd "$1" && PATH="$LP/bin:$PATH" HH_HOME="$H" HH_MAX_TASKS=1 bash "$SRC/run.sh" "$1" 2>&1 ); }
+loop_review() { ( cd "$1" && PATH="$LP/bin:$PATH" HH_HOME="$H" HH_REVIEW_MAX="${HH_REVIEW_MAX:-1}" bash "$SRC/review.sh" "$1" 2>&1 ); }
+label() { grep "^$2:" "$1/tasks/10-a/01-x/labels.txt" | cut -d' ' -f2; }
+FILL='echo 2 > code.txt; sed -e "s/(not checked)/ok/g" -e "s/(write here)/done/g" "$HH_NOTES_FILE" > "$HH_NOTES_FILE.new" && mv "$HH_NOTES_FILE.new" "$HH_NOTES_FILE"'
+PASS='{"is_error":false,"total_cost_usd":0,"structured_output":{"verdict":"passed","summary":"ok","evidence":[{"claim":"read code.txt, it holds 2"}],"unmet":[]}}'
+
+P="$LP/p-happy"; new_project "$P"
+STUB_HERMES_DO="$FILL" loop_run "$P" >/dev/null
+check "the writing loop hands a finished task to review" "$(label "$P" status)" '^review$'
+STUB_CLAUDE_REPLY="$PASS" loop_review "$P" >/dev/null
+check "the reviewer closes a passed task"                "$(label "$P" status) $(label "$P" verify)" '^done passed$'
+
+P="$LP/p-oldhermes"; new_project "$P"
+out=$(STUB_HERMES_HELP='  -Q, --quiet' loop_run "$P"); lrc=$?
+check "a hermes without stream-json is refused by name"  "$out" 'stream-json'
+check "the refusal is an error exit"                     "$lrc" '^1$'
+check "and the task was not touched"                     "$(label "$P" status)" '^todo$'
+
 echo "== config"
 cfg=$(cat "$SRC/config.yaml")
 check "approvals are off"              "$cfg" 'mode: "off"'

@@ -20,6 +20,8 @@ STATE="$PROJECT/.hermes-harness"
 LOGS="$STATE/logs"
 
 command -v hermes >/dev/null 2>&1 || { echo "hermes is not on PATH" >&2; exit 1; }
+hermes ${PROFILE:+-p "$PROFILE"} chat --help 2>/dev/null | grep -q -- 'stream-json' \
+  || { echo "this hermes has no 'chat --format stream-json'; the harness needs a build that has it (see README)" >&2; exit 1; }
 [ -d "$ROOT" ] || { echo "no task tree at $ROOT" >&2; exit 1; }
 [ -f "$HARNESS/tasks.py" ] || { echo "harness not installed at $HARNESS (run install.sh)" >&2; exit 1; }
 mkdir -p "$LOGS" "$STATE/attempts" "$STATE/sessions"
