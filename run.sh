@@ -80,15 +80,19 @@ for i, (name, _, end) in enumerate(marks):
 PY
 }
 
-# What the working tree holds, not how many lines git prints about it: an edit
-# inside an already-modified file moves no counter, and a count says nothing
-# about what changed.
-work_fingerprint() {
-  ( cd "$WORKDIR" || exit 0
-    { git diff HEAD -- . ':!.hermes-notes' 2>/dev/null
-      git ls-files -o --exclude-standard -- . ':!.hermes-notes' 2>/dev/null \
-        | while IFS= read -r f; do printf '%s ' "$f"; sha1sum "$f" 2>/dev/null | cut -d' ' -f1; echo; done
-    } | sha1sum | cut -d' ' -f1 ) || echo none
+snapshot_id() { python3 "$HARNESS/snapshot.py" "$WORKDIR" "$guard_root" 2>/dev/null || true; }
+
+record_check() {
+  printf '%s' "$2" > "$LOGS/$1.check.rc"
+  snapshot_id > "$LOGS/$1.check.snap"
+  printf '%s' "$TEST_CMD" > "$LOGS/$1.check.cmd"
+}
+
+check_is_fresh() {
+  local snap; snap=$(snapshot_id)
+  [ -n "$snap" ] && [ -f "$LOGS/$1.check.out" ] && [ -f "$LOGS/$1.check.rc" ] \
+    && [ "$(cat "$LOGS/$1.check.snap" 2>/dev/null)" = "$snap" ] \
+    && [ "$(cat "$LOGS/$1.check.cmd" 2>/dev/null)" = "$TEST_CMD" ]
 }
 
 changed_files() {
@@ -128,8 +132,7 @@ measure() {
   [ "$MEASURE" = "1" ] && [ -n "$TEST_CMD" ] || return 0
   echo "   measuring: $TEST_CMD"
   ( cd "$WORKDIR" && eval "$TEST_CMD" ) > "$LOGS/$name.check.out" 2>&1 || rc=$?
-  printf '%s' "$rc" > "$LOGS/$name.check.rc"
-  work_fingerprint > "$LOGS/$name.check.fp"
+  record_check "$name" "$rc"
   echo "   it exited $rc"
   {
     printf '\n## Measured by the harness (attempt %s)\n\n' "$attempt"
@@ -193,7 +196,7 @@ while :; do
   tasks scaffold "$task" > "$notes_dir/NOTES.md"
   cp "$notes_dir/NOTES.md" "$notes_dir/.scaffold"
 
-  before=$(work_fingerprint)
+  before=$(snapshot_id)
   if [ -n "$resume_id" ]; then
     echo "   resuming session $resume_id rather than starting over"
     prompt_source=continuation
@@ -236,7 +239,7 @@ print(last)
 PY
 )
   [ -n "$new_session" ] && printf '%s' "$new_session" > "$session_file"
-  after=$(work_fingerprint)
+  after=$(snapshot_id)
 
   notes_written=0
   if [ -s "$notes_dir/NOTES.md" ] && ! cmp -s "$notes_dir/NOTES.md" "$notes_dir/.scaffold"; then
@@ -280,7 +283,7 @@ PY
     continue
   fi
 
-  if [ "$after" = "$before" ] && [ "$notes_written" = "0" ]; then
+  if [ -n "$before" ] && [ "$after" = "$before" ] && [ "$notes_written" = "0" ]; then
     echo "   the working tree is byte-for-byte what it was, and the notes form was left untouched -> stays open"
     ledger "$name" worker in_progress in_progress "no change, no notes"
     note "$task" "harness: run exited 0 but left the working tree unchanged and the notes form untouched; log $LOGS/$name.ndjson"
@@ -288,12 +291,12 @@ PY
   fi
 
   touched=$(changed_files)
-  if [ "$after" = "$before" ]; then
+  if [ -n "$before" ] && [ "$after" = "$before" ]; then
     what="the working tree is unchanged, but notes were written"
   else
     what="the working tree changed, $touched path(s) differ from HEAD"
   fi
-  [ "$after" != "$before" ] && measure "$task" "$name" "$((attempts + 1))" || true
+  { [ -z "$before" ] || [ "$after" != "$before" ]; } && measure "$task" "$name" "$((attempts + 1))" || true
   echo "   $what -> review"
   mkdir -p "$STATE/review"
   printf 'worktree\n' > "$STATE/review/$name"

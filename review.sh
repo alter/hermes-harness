@@ -103,12 +103,21 @@ next_in_queue() {
   return 1
 }
 
-work_fingerprint() {
-  ( cd "$WORKDIR" || exit 0
-    { git diff HEAD -- . ':!.hermes-notes' 2>/dev/null
-      git ls-files -o --exclude-standard -- . ':!.hermes-notes' 2>/dev/null \
-        | while IFS= read -r f; do printf '%s ' "$f"; sha1sum "$f" 2>/dev/null | cut -d' ' -f1; echo; done
-    } | sha1sum | cut -d' ' -f1 ) || echo none
+guard_root=${HH_PROTECTED_ROOT:-$(basename "$ROOT")}
+
+snapshot_id() { python3 "$HARNESS/snapshot.py" "$WORKDIR" "$guard_root" 2>/dev/null || true; }
+
+record_check() {
+  printf '%s' "$2" > "$LOGS/$1.check.rc"
+  snapshot_id > "$LOGS/$1.check.snap"
+  printf '%s' "$TEST_CMD" > "$LOGS/$1.check.cmd"
+}
+
+check_is_fresh() {
+  local snap; snap=$(snapshot_id)
+  [ -n "$snap" ] && [ -f "$LOGS/$1.check.out" ] && [ -f "$LOGS/$1.check.rc" ] \
+    && [ "$(cat "$LOGS/$1.check.snap" 2>/dev/null)" = "$snap" ] \
+    && [ "$(cat "$LOGS/$1.check.cmd" 2>/dev/null)" = "$TEST_CMD" ]
 }
 
 # What the writing loop left behind: a commit it made, or the uncommitted state
@@ -253,19 +262,20 @@ while :; do
   gate=go
   new_failures=""
   check_out="$LOGS/$name.check.out"
+  fresh=0
   if [ "$PREGATE" = "1" ] && [ -n "$TEST_CMD" ]; then
     ref=$(baseline_ref "$name")
     work_rc=0
-    if [ -f "$check_out" ] && [ -f "$LOGS/$name.check.fp" ] && [ -f "$LOGS/$name.check.rc" ] \
-       && [ "$(cat "$LOGS/$name.check.fp")" = "$(work_fingerprint)" ]; then
+    if check_is_fresh "$name"; then
       work_rc=$(cat "$LOGS/$name.check.rc")
       echo "   the project's check was already run against this exact tree: exit $work_rc, reusing it"
+      fresh=1
     else
       echo "   the project's check first: $TEST_CMD"
       run_check "$WORKDIR" "$check_out" || work_rc=$?
-      printf '%s' "$work_rc" > "$LOGS/$name.check.rc"
-      work_fingerprint > "$LOGS/$name.check.fp"
+      record_check "$name" "$work_rc"
       echo "   it exited $work_rc here"
+      fresh=1
     fi
     baseline_check "$ref" "$LOGS/$name.baseline.out"
     if [ -z "$BASELINE_RC" ]; then
@@ -327,7 +337,8 @@ while :; do
 
   set +e
   check_arg=()
-  [ -s "$check_out" ] && check_arg=(--check-output "$check_out") || true
+  [ "$fresh" = "0" ] && [ -n "$TEST_CMD" ] && check_is_fresh "$name" && fresh=1 || true
+  [ "$fresh" = "1" ] && [ -s "$check_out" ] && check_arg=(--check-output "$check_out") || true
   tasks review-prompt "$task" --diff "$diff_file" --test-command "$TEST_CMD" --workdir "$WORKDIR" \
     "${check_arg[@]}" \
     | ( cd "$WORKDIR" && claude -p \

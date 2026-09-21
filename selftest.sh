@@ -421,7 +421,7 @@ rs=$(cat "$SRC/run.sh")
 check "the writing loop lays out the form before the run" "$rs" 'tasks scaffold'
 check "an untouched form does not count as notes"        "$rs" 'cmp -s .*\.scaffold'
 check "the writing loop measures the project check itself" "$rs" 'Measured by the harness'
-check "the measurement is kept for the reviewer to reuse"  "$rs" 'check\.fp'
+check "the measurement is kept for the reviewer to reuse"  "$rs" 'check\.snap'
 check "every transition is written to the ledger"          "$(printf '%s' "$rs" | grep -c '^ *ledger ')" '^[6-9]$|^[1-9][0-9]$'
 check "the reviewer reuses a measurement of the same tree" "$rvs" 'reusing it'
 check "a range of commits can be the change under review" "$rvs" 'range\\ \*'
@@ -476,6 +476,42 @@ out=$(STUB_HERMES_HELP='  -Q, --quiet' loop_run "$P"); lrc=$?
 check "a hermes without stream-json is refused by name"  "$out" 'stream-json'
 check "the refusal is an error exit"                     "$lrc" '^1$'
 check "and the task was not touched"                     "$(label "$P" status)" '^todo$'
+
+P="$LP/p-snap"; new_project "$P"
+snap() { python3 "$H/snapshot.py" "$P" tasks 2>/dev/null; }
+clean_a=$(snap)
+check "a clean tree's snapshot is its HEAD tree" "$clean_a" "^$(cd "$P" && git rev-parse 'HEAD^{tree}')\$"
+( cd "$P" && echo 2 > code.txt ); dirty=$(snap)
+[ "$dirty" != "$clean_a" ] && ok "an edit moves the snapshot" || bad "an edit moves the snapshot" "$dirty"
+empty "taking a snapshot stages nothing" "$(cd "$P" && git diff --cached --name-only)"
+( cd "$P" && git commit -qam work )
+check "the same content has the same snapshot after the commit" "$(snap)" "^$dirty\$"
+( cd "$P" && echo 3 > code.txt && git commit -qam other )
+[ "$(snap)" != "$dirty" ] && ok "two clean commits have different snapshots" || bad "two clean commits have different snapshots" "$(snap)"
+empty "outside a repository the snapshot is empty" "$(python3 "$H/snapshot.py" "$TMP" 2>/dev/null)"
+
+P="$LP/p-reuse"; new_project "$P"; : > "$LP/count.txt"
+STUB_HERMES_DO="$FILL" HH_TEST_COMMAND="echo run >> $LP/count.txt" loop_run "$P" >/dev/null
+STUB_CLAUDE_REPLY="$PASS" HH_TEST_COMMAND="echo run >> $LP/count.txt" loop_review "$P" >/dev/null
+check "a measurement taken before the commit is reused after it" "$(wc -l < "$LP/count.txt" | tr -d ' ')" '^2$'
+
+P="$LP/p-stale"; new_project "$P"
+STUB_HERMES_DO="$FILL" loop_run "$P" >/dev/null
+# The slug is taken from run.sh's own record, not assumed, because it can be
+# longer than the task path suggests when the OS resolves the temp dir through
+# a symlink (macOS: /var -> /private/var) and tasks.py's resolved path then no
+# longer has $ROOT as a literal prefix.
+L="$P/.hermes-harness/logs/$(basename "$(ls "$P"/.hermes-harness/logs/*.ndjson | head -n 1)" .ndjson)"
+stale() { echo STALE-MARK > "$L.check.out"; printf 0 > "$L.check.rc"
+          for s in fp snap; do printf da39a3ee5e6b4b0d3255bfef95601890afd80709 > "$L.check.$s"; done
+          printf 'echo OLD' > "$L.check.cmd"; }
+stale
+STUB_CLAUDE_PROMPT="$LP/prompt1.txt" STUB_CLAUDE_REPLY="$PASS" HH_TEST_COMMAND='echo NEW-MARK' loop_review "$P" >/dev/null
+check "a measurement of another tree is taken again" "$(cat "$L.check.out")" 'NEW-MARK'
+check "and the stale output never reaches the reviewer" "$(grep -c STALE-MARK "$LP/prompt1.txt" || true)" '^0$'
+printf 'priority: P1\nstatus: review\nverify: pending\nrole: AGENT\n' > "$P/tasks/10-a/01-x/labels.txt"; stale
+STUB_CLAUDE_PROMPT="$LP/prompt2.txt" STUB_CLAUDE_REPLY="$PASS" HH_PREGATE=0 HH_TEST_COMMAND='echo NEW-MARK' loop_review "$P" >/dev/null
+check "with the gate off a stale output is not passed on either" "$(grep -c STALE-MARK "$LP/prompt2.txt" || true)" '^0$'
 
 P="$LP/p-banana"; new_project "$P"
 printf 'priority: P1\nstatus: review\nverify: pending\nrole: AGENT\n' > "$P/tasks/10-a/01-x/labels.txt"
