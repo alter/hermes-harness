@@ -20,6 +20,8 @@ ONLY=${HH_REVIEW_ONLY:-}
 PREGATE=${HH_PREGATE:-1}
 PATTERN=${HH_PREGATE_PATTERN:-}
 MAX_RETURNS=${HH_MAX_RETURNS:-3}
+INFRA_MAX=${HH_REVIEW_INFRA_MAX:-3}
+INFRA_DEFER=${HH_REVIEW_INFRA_DEFER:-3600}
 DIFF_LIMIT=${HH_REVIEW_DIFF_CHARS:-200000}
 STATE="$PROJECT/.hermes-harness"
 LOGS="$STATE/logs"
@@ -27,7 +29,7 @@ LOGS="$STATE/logs"
 command -v claude >/dev/null 2>&1 || { echo "claude is not on PATH" >&2; exit 1; }
 [ -d "$ROOT" ] || { echo "no task tree at $ROOT" >&2; exit 1; }
 [ -f "$HARNESS/tasks.py" ] || { echo "harness not installed at $HARNESS (run install.sh)" >&2; exit 1; }
-mkdir -p "$LOGS" "$STATE/review-rounds" "$STATE/review" "$STATE/returns" "$STATE/baseline"
+mkdir -p "$LOGS" "$STATE/review-rounds" "$STATE/review" "$STATE/returns" "$STATE/baseline" "$STATE/review-infra"
 printf '*\n' > "$STATE/.gitignore"
 
 help=$(claude --help 2>/dev/null || true)
@@ -66,6 +68,39 @@ slug()  { printf '%s' "${1#$ROOT/}" | tr '/' '-'; }
 ledger() {
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" "$3" "$4" "$5" "${6:-}" \
     >> "$STATE/ledger.tsv"
+}
+
+log_call() {
+  python3 - "$LOGS/$1.review.json" "$1" "$2" >> "$STATE/calls.tsv" <<'PY'
+import datetime, json, sys
+path, name, rc = sys.argv[1:4]
+try:
+    env = json.load(open(path, encoding="utf-8"))
+except Exception:
+    env = None
+env = env if isinstance(env, dict) else {}
+usage = env.get("usage") if isinstance(env.get("usage"), dict) else {}
+num = lambda v: str(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else "?"
+print("\t".join([datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), name, rc,
+                 num(env.get("total_cost_usd")), num(env.get("num_turns")),
+                 num(usage.get("input_tokens")), num(usage.get("output_tokens")),
+                 env.get("subtype") if isinstance(env.get("subtype"), str) else "?"]))
+PY
+}
+
+is_deferred() {
+  local count=0 at=0
+  [ -f "$STATE/review-infra/$1" ] || return 1
+  read -r count at < "$STATE/review-infra/$1" || true
+  [ "${count:-0}" -ge "$INFRA_MAX" ] && [ $(( $(date +%s) - ${at:-0} )) -lt "$INFRA_DEFER" ]
+}
+
+next_in_queue() {
+  local t
+  while IFS= read -r t; do
+    is_deferred "$(slug "$t")" || { printf '%s\n' "$t"; return 0; }
+  done < <(tasks queue review || true)
+  return 1
 }
 
 work_fingerprint() {
@@ -196,7 +231,13 @@ while :; do
   if [ -n "$only_dir" ]; then
     task=$only_dir
   else
-    task=$(tasks queue review | head -n 1) || { echo "== nothing waiting in review"; break; }
+    task=$(next_in_queue) || {
+      if tasks queue review >/dev/null; then
+        echo "== everything waiting in review is put off after repeated reviewer failures; see status.sh"
+        exit 75
+      fi
+      echo "== nothing waiting in review"; break
+    }
   fi
   [ -n "$task" ] || { echo "== nothing waiting in review"; break; }
   name=$(slug "$task")
@@ -298,6 +339,14 @@ while :; do
         --max-budget-usd "$BUDGET" ) > "$LOGS/$name.review.json" 2>"$LOGS/$name.review.err"
   rc=$?
   set -e
+  log_call "$name" "$rc"
+
+  cost=$(python3 -c "
+import json,sys
+try:
+    print(f\"{json.load(open(sys.argv[1])).get('total_cost_usd', 0):.2f}\")
+except Exception:
+    print('?')" "$LOGS/$name.review.json")
 
   if [ "$rc" -eq 130 ] || [ "$rc" -eq 143 ]; then
     echo "   the review was interrupted (exit $rc); the task keeps its status"
@@ -310,12 +359,17 @@ while :; do
   }
   read -r verdict denied usable <<<"$outcome"
 
-  cost=$(python3 -c "
-import json,sys
-try:
-    print(f\"{json.load(open(sys.argv[1])).get('total_cost_usd', 0):.2f}\")
-except Exception:
-    print('?')" "$LOGS/$name.review.json")
+  if [ "$usable" = "infra" ]; then
+    infra=$(( $(cut -d' ' -f1 "$STATE/review-infra/$name" 2>/dev/null || echo 0) + 1 ))
+    printf '%s %s\n' "$infra" "$(date +%s)" > "$STATE/review-infra/$name"
+    echo "   the reviewer call failed (claude exited $rc); nothing is counted and nothing is blocked"
+    [ -s "$LOGS/$name.review.err" ] && tail -n 5 "$LOGS/$name.review.err" | sed 's/^/     /'
+    ledger "$name" reviewer review review "reviewer call failed (exit $rc), $infra in a row for this task" "$cost"
+    [ "$infra" -ge "$INFRA_MAX" ] && echo "   $infra in a row: $name is put off for ${INFRA_DEFER}s so the queue can move; it stays in review"
+    exit 75
+  fi
+  rm -f "$STATE/review-infra/$name"
+
   echo "   verdict: $verdict (denied commands: $denied, usable: $usable)"
   echo "   cost: $cost USD"
 

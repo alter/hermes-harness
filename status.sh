@@ -13,7 +13,7 @@ LEDGER="$STATE/ledger.tsv"
 [ -f "$HARNESS/tasks.py" ] || { echo "harness not installed at $HARNESS" >&2; exit 1; }
 
 python3 - "$ROOT" "$STATE" "$LEDGER" "$HARNESS" <<'PY'
-import collections, pathlib, sys
+import collections, datetime, pathlib, sys
 root, state, ledger_path, harness = (pathlib.Path(a) for a in sys.argv[1:5])
 sys.path.insert(0, str(harness))
 import tasks
@@ -67,19 +67,41 @@ if not shown:
 
 print()
 print("== reviews")
-spent = 0.0
 verdicts = collections.Counter()
 for row in rows:
-    if row[2] == "reviewer":
+    if row[2] == "reviewer" and not row[5].startswith("reviewer call failed"):
         verdicts[row[4]] += 1
-        try:
-            spent += float(row[6])
-        except ValueError:
-            pass
 gates = sum(1 for row in rows if row[2] == "gate")
 print(f"   reviewer verdicts: " + (", ".join(f"{k} {v}" for k, v in sorted(verdicts.items())) or "none"))
 print(f"   sent back by the gate without a reader: {gates}")
-print(f"   spent on reviews: {spent:.2f} USD")
+
+calls = []
+calls_path = state / "calls.tsv"
+if calls_path.exists():
+    calls = [line.split("\t") for line in calls_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+col = lambda i: [c[i] for c in calls if len(c) > i]
+failed_calls = sum(1 for rc in col(2) if rc != "0")
+cost_known = [float(c) for c in col(3) if c != "?"]
+tok_in = [int(float(c)) for c in col(5) if c != "?"]
+tok_out = [int(float(c)) for c in col(6) if c != "?"]
+print(f"   reviewer calls: {len(calls)}")
+print(f"   calls that returned no answer: {failed_calls}")
+print(f"   tokens in/out where the CLI reported them: {sum(tok_in)}/{sum(tok_out)}, unknown for {len(calls) - len(tok_in)} call(s)")
+print(f"   computed cost of reviews: {sum(cost_known):.2f} USD (a figure the CLI reports; on a subscription it is not a charge), "
+      f"unknown for {len(calls) - len(cost_known)} call(s)")
+
+infra_dir = state / "review-infra"
+failing = sorted(p for p in infra_dir.iterdir() if p.is_file()) if infra_dir.is_dir() else []
+if failing:
+    print()
+    print("== reviewer failures")
+    for path in failing:
+        count, _, at = path.read_text().strip().partition(" ")
+        try:
+            when = datetime.datetime.fromtimestamp(int(at or 0), datetime.timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
+        except ValueError:
+            when = "?"
+        print(f"   {path.name} {count} in a row, last {when}")
 
 print()
 print("== state")

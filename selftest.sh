@@ -294,8 +294,18 @@ check "a pass with no evidence is refused" "$(verdict_of 0 '')" '^passed 0 no$'
 cat > "$env_file" <<'JSON'
 {"is_error": false, "permission_denials": [], "result": "credit balance too low"}
 JSON
-check "a run that produced nothing is refused" "$(verdict_of 1 '')" '^none 0 no$'
-check "the reason names the exit code" "$(cat "$vd/REVIEW.unusable.md")" 'claude exited 1'
+rm -f "$vd/REVIEW.unusable.md"
+check "a run that produced nothing is a reviewer-call failure, not a verdict" "$(verdict_of 1 '')" '^none 0 infra$'
+empty "an infra failure writes no file for the task to read" "$(cat "$vd/REVIEW.unusable.md" 2>/dev/null)"
+cat > "$env_file" <<'JSON'
+{"is_error": true, "subtype": "error_max_turns", "permission_denials": [], "result": "hit the turn limit"}
+JSON
+check "a run that hit its own limit is refused, not treated as an infra failure" "$(verdict_of 1 '')" '^none 0 no$'
+check "the reason names the limit, not the task" "$(cat "$vd/REVIEW.unusable.md")" 'its own limit'
+cat > "$env_file" <<'JSON'
+{"is_error": true, "subtype": "error_max_something_new", "permission_denials": [], "result": "boom"}
+JSON
+check "an unlisted subtype is still an infra failure" "$(verdict_of 1 '')" '^none 0 infra$'
 cat > "$env_file" <<'JSON'
 {"is_error": false, "permission_denials": [],
  "structured_output": {"verdict": "passed", "summary": "it holds", "unmet": [],
@@ -469,6 +479,44 @@ printf 'priority: P1\nstatus: review\nverify: pending\nrole: AGENT\n' > "$P/task
 STRINGY='{"is_error":false,"total_cost_usd":0,"structured_output":{"verdict":"passed","summary":"s","evidence":"I read everything","unmet":[]}}'
 STUB_CLAUDE_REPLY="$STRINGY" loop_review "$P" >/dev/null
 check "a pass whose evidence is not a list closes nothing" "$(label "$P" status) $(label "$P" verify)" '^review pending$'
+
+review_runs() { for _ in $(seq "$1"); do loop_review "$P" >/dev/null; done; }
+calls() { wc -l < "$P/.hermes-harness/calls.tsv" 2>/dev/null | tr -d ' '; }
+two_in_review() {
+  new_project "$P"; mkdir -p "$P/tasks/10-a/02-y"; mk "$P/tasks/10-a/02-y" "y" "code.txt" "true" "AGENT"
+  for t in 01-x 02-y; do printf 'priority: P1\nstatus: review\nverify: pending\nrole: AGENT\n' > "$P/tasks/10-a/$t/labels.txt"; done
+}
+status_y() { grep '^status:' "$P/tasks/10-a/02-y/labels.txt" | cut -d' ' -f2; }
+DOWN='{"is_error":true,"total_cost_usd":0.1,"result":"usage limit reached"}'
+
+P="$LP/p-infra"; two_in_review
+out=$(STUB_CLAUDE_RC=1 STUB_CLAUDE_REPLY="$DOWN" HH_REVIEW_MAX=0 loop_review "$P"); lrc=$?
+check "an unavailable reviewer stops the loop with exit 75" "$lrc" '^75$'
+check "it blocks nothing"          "$(label "$P" status) $(status_y)" '^review review$'
+check "it counts no review round"  "$(ls "$P/.hermes-harness/review-rounds" 2>/dev/null | wc -l | tr -d ' ')" '^0$'
+check "the call is on record with what the CLI said it cost" "$(cat "$P/.hermes-harness/calls.tsv")" '0\.1'
+STUB_CLAUDE_RC=1 STUB_CLAUDE_REPLY="$DOWN" HH_REVIEW_INFRA_MAX=2 HH_REVIEW_MAX=0 review_runs 3
+check "an outage that lasts blocks nothing either" "$(label "$P" status) $(status_y)" '^review review$'
+check "one failing call per run, each on record"   "$(calls)" '^4$'
+
+P="$LP/p-recover"; two_in_review; rm -f "$LP/n.txt"
+RECOVER="n=\$(( \$(cat $LP/n.txt 2>/dev/null || echo 0) + 1 )); echo \$n > $LP/n.txt; [ \$n -le 3 ] && { echo '{\"is_error\":true,\"result\":\"temporary outage\"}'; exit 1; }"
+STUB_CLAUDE_DO="$RECOVER" STUB_CLAUDE_REPLY="$PASS" HH_REVIEW_INFRA_MAX=3 HH_REVIEW_MAX=0 review_runs 4
+check "after an outage ends the task that met it is not blamed" "$(label "$P" status)" '^review$'
+check "and the queue moved on meanwhile"                        "$(status_y)" '^done$'
+STUB_CLAUDE_DO="$RECOVER" STUB_CLAUDE_REPLY="$PASS" HH_REVIEW_INFRA_DEFER=0 HH_REVIEW_MAX=0 review_runs 1
+check "once it is tried again it passes like any other"        "$(label "$P" status) $(label "$P" verify)" '^done passed$'
+check "five calls were made and five are on record"            "$(calls)" '^5$'
+st=$(cd "$P" && HH_HOME="$H" bash "$SRC/status.sh" "$P" 2>&1 || true)
+check "status.sh counts calls, not ledger lines"               "$st" 'reviewer calls: +5'
+
+P="$LP/p-poison"; two_in_review
+POISON='grep -q "TASK: x" "$STUB_CLAUDE_PROMPT" && { echo "{\"is_error\":true,\"result\":\"boom\"}"; exit 1; }'
+STUB_CLAUDE_PROMPT="$LP/poison-prompt.txt" STUB_CLAUDE_DO="$POISON" STUB_CLAUDE_REPLY="$PASS" HH_REVIEW_INFRA_MAX=2 HH_REVIEW_MAX=0 review_runs 3
+check "a task the reviewer keeps failing on does not hold the queue" "$(status_y)" '^done$'
+check "and is put off, not blocked"                                   "$(label "$P" status)" '^review$'
+st=$(cd "$P" && HH_HOME="$H" bash "$SRC/status.sh" "$P" 2>&1 || true)
+check "status.sh shows it to a human"                                 "$st" '10-a-01-x +2 in a row'
 
 echo "== config"
 cfg=$(cat "$SRC/config.yaml")

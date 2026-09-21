@@ -15,6 +15,13 @@ if not isinstance(envelope, dict):
     why.append("the envelope is not a JSON object")
     envelope = {}
 
+OWN_LIMITS = {"error_max_turns", "error_max_budget_usd", "error_max_structured_output_retries"}
+subtype = envelope.get("subtype") if isinstance(envelope.get("subtype"), str) else ""
+call_failed = rc != "0" or not envelope or bool(envelope.get("is_error"))
+if call_failed and subtype not in OWN_LIMITS:
+    print("none", 0, "infra")
+    sys.exit(0)
+
 raw_out = envelope.get("structured_output")
 if raw_out is None:
     out = {}
@@ -86,6 +93,8 @@ else:
 
 if rc != "0" or envelope.get("is_error"):
     why.append(f"claude exited {rc}" + (f": {str(envelope.get('result'))[:200]}" if envelope.get("result") else ""))
+if subtype in OWN_LIMITS:
+    why.append(f"the review stopped at its own limit: {subtype}")
 if not verdict:
     why.append("the run produced no verdict")
 elif verdict not in ("passed", "failed", "blocked"):
